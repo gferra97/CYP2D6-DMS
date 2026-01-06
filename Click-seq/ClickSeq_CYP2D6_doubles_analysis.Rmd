@@ -1,0 +1,1506 @@
+---
+title: "ClickSeq_CYP2D6_doubles_analysis"
+author: "Gabrielle Ferra"
+date: "2025-02-25"
+output: html_document
+---
+
+## Setup
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load in libraries, directory, and dataset
+```{r load in your libraries, path, and data}
+# Load in libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# Load in the path
+path = "/Users/gabrielleferra/Desktop/CYP-project/20250828_clickseq_dataset_MINQUAL67_final_datasets_and_analysis/"
+
+# Load the final click-seq DMS activity scores
+CYP2D6_data <- read.table(file = file.path(path, "Final_Scores/Pacybara_CYP2D6_activity_scores_singles_fs_and_doubles_12_1e-5_8.231228e-05_2expts_softfilter_MINQUAL67.csv"), sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+```
+
+### Determine the upper and lower bounds for the scores when you're doing your epistasis analysis - the upper bound is where 95% of synonymous variants have a score less than this value and the lower bound is where 5% of nonsense variants have a score less than this value
+```{r determine the score cutoff values}
+# Get various synonymous and nonsense stats
+synonymous_lowest <- quantile(subset(CYP2D6_data, class == "synonymous")$score, 0.05, na.rm = TRUE)
+synonymous_highest <- quantile(subset(CYP2D6_data, class == "synonymous")$score, 0.95, na.rm = TRUE)
+nonsense_lowest <- quantile(subset(CYP2D6_data, class == "nonsense" & position < 441)$score, 0.05, na.rm = TRUE)
+nonsense_highest <- quantile(subset(CYP2D6_data, class == "nonsense" & position < 441)$score, 0.95, na.rm = TRUE)
+
+nonsense_lowest_2 <- quantile(subset(CYP2D6_data, class == "nonsense")$score, 0.05, na.rm = TRUE)
+nonsense_highest_2 <- quantile(subset(CYP2D6_data, class == "nonsense")$score, 0.95, na.rm = TRUE)
+
+# Define the upper and lower bounds
+upper_bound <- synonymous_highest
+lower_bound <- nonsense_lowest
+
+```
+
+### Apply the bounds
+```{r apply the bounds}
+# Apply the bounds
+CYP2D6_data_doubles <- subset(CYP2D6_data, CYP2D6_data$class == "double")
+CYP2D6_data_doubles <- subset(CYP2D6_data_doubles, CYP2D6_data_doubles$score < upper_bound & CYP2D6_data_doubles$score > lower_bound)
+
+CYP2D6_data_singles <- subset(CYP2D6_data, class != "double")
+CYP2D6_data_singles <- subset(CYP2D6_data_singles, CYP2D6_data_singles$score < upper_bound & CYP2D6_data_singles$score > lower_bound)
+
+# Separate variant name into variant_1 and variant_2 columns, with their respective scores (score_var_1, score_var_2), mutation classes (class_var_1, class_var_2), and activity classes (activity_class_var_1, activity_class_var_2)
+CYP2D6_data_doubles <- CYP2D6_data_doubles %>%
+  # Separate the doubles column into variant_1 and variant_2
+  mutate(variant_1 = variant, variant_2 = variant) %>%  # Duplicate variant column
+  separate(variant_1, into = c("variant_1", "remove"), sep = ",", extra = "drop") %>%  # Keep first part
+  separate(variant_2, into = c("remove", "variant_2"), sep = ",", extra = "drop") %>%  # Keep second part
+  mutate(
+    variant_2 = trimws(variant_2)  # Remove leading and trailing spaces in variant_2
+  ) %>%
+  select(-remove) %>%  # Remove the temporary column
+  # Join score, class, and activity_class for variant_1
+  left_join(
+    CYP2D6_data_singles %>%
+      select(variant, score, class, activity_class) %>%
+      dplyr::rename(
+        score_var_1 = score,
+        class_var_1 = class,
+        activity_class_var_1 = activity_class
+      ),
+    by = c("variant_1" = "variant")
+  ) %>%
+  # Join score, class, and activity_class for variant_2
+  left_join(
+    CYP2D6_data_singles %>%
+      select(variant, score, class, activity_class) %>%
+      dplyr::rename(
+        score_var_2 = score,
+        class_var_2 = class,
+        activity_class_var_2 = activity_class
+      ),
+    by = c("variant_2" = "variant")
+  )
+
+# omit any NAs
+CYP2D6_data_doubles <- na.omit(CYP2D6_data_doubles) # end up with 1181
+
+```
+
+
+## Compute all of the different doubles scores using the single variant scores
+```{r Calculate the scores}
+# Get the multiplicative score
+CYP2D6_data_doubles <- CYP2D6_data_doubles %>%
+  mutate(multiplicative_score = ifelse(!is.na(score_var_1) & !is.na(score_var_2), 
+                                  score_var_1 * score_var_2, 
+                                  NA))
+
+# Get the minimum score
+CYP2D6_data_doubles <- CYP2D6_data_doubles %>%
+  mutate(min_score = ifelse(!is.na(score_var_1) & !is.na(score_var_2), pmin(score_var_1, score_var_2), NA))
+
+# Get the maximum score
+CYP2D6_data_doubles <- CYP2D6_data_doubles %>%
+  mutate(max_score = ifelse(!is.na(score_var_1) & !is.na(score_var_2), pmax(score_var_1, score_var_2), NA))
+
+# Calculate the geometric mean
+CYP2D6_data_doubles <- CYP2D6_data_doubles %>%
+  mutate(geometric_mean = ifelse(!is.na(score_var_1) & !is.na(score_var_2) & 
+                                 score_var_1 > 0 & score_var_2 > 0, 
+                                 sqrt(score_var_1 * score_var_2), 
+                                 NA))
+
+# Calculate the arithmetic mean
+CYP2D6_data_doubles <- CYP2D6_data_doubles %>%
+  mutate(arith_mean = ifelse(!is.na(score_var_1) & !is.na(score_var_2), 
+                             (score_var_1 + score_var_2) / 2, 
+                             NA))
+
+# Calculate the log-transformed additive mean
+CYP2D6_data_doubles <- CYP2D6_data_doubles %>%
+  mutate(log_additivity = ifelse(!is.na(score_var_1) & !is.na(score_var_2) & score_var_1 > 0 & score_var_2 > 0, 
+                                 exp((log(score_var_1) + log(score_var_2)) / 2), 
+                                 NA))
+
+# Save this file with the doubles scores + the scores for the respective mutants + all the different types of scores
+write.table(CYP2D6_data_doubles, file = file.path(path, "Final_Scores/20251106_Pacybara_CYP2D6_activity_scores_doubles_12_8.231228e-05_2expts_softfilter_MINQUAL67_respectivesingles_allscoretypes.csv"),sep = "\t", quote = FALSE, row.names = F, col.names = T)
+
+```
+
+## Multiplicative score analysis
+```{r Multiplicative score analysis}
+# load the dataset
+CYP2D6_data_doubles <- read.table(file = file.path(path, "Final_Scores/20251106_Pacybara_CYP2D6_activity_scores_doubles_12_8.231228e-05_2expts_softfilter_MINQUAL67_respectivesingles_allscoretypes.csv"), sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+
+# Make the scatterplot of the CYP2D6 score vs. the multiplicative score
+mult_plot <- ggplot(CYP2D6_data_doubles, aes(x = multiplicative_score, y = score)) +
+  geom_point(alpha = 0.6) +  # Scatter plot with semi-transparent points
+  geom_abline(intercept = 0, slope = 1, color = "#9C0520", linewidth = 0.7) +  # Solid y=x line
+  theme_minimal() +
+  labs(
+    title = "Click-Seq Activity Score vs Multiplicative Score",
+    x = "Multiplicative Score",
+    y = "Click-Seq Activity Score"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    axis.line = element_line(color = "black", linewidth = 0.3)
+  )
+
+# Save the plot
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_multiplicative_syn_and_non_bounds.png"), plot = mult_plot, device = "png", height =4, width = 8, bg = "white")
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_multiplicative_syn_and_non_bounds.pdf"), plot = mult_plot, device = "pdf", height =4, width = 8, bg = "white")
+
+# Get the R-squared
+lm_fit <- lm(score ~ multiplicative_score, data = CYP2D6_data_doubles)
+r_squared <- summary(lm_fit)$r.squared
+print(r_squared)
+# w/o scores > 1 = 0.5284907
+# w syn and non bounds = 0.4650935
+
+# Calculate the difference between the click-seq score and the multiplicative score
+CYP2D6_data_doubles <- CYP2D6_data_doubles %>%
+  mutate(difference_mult = score - multiplicative_score)
+
+# Perform a one-sample t-test: This will test if the mean of the differences is significantly different from zero. If the p-value is low (usually below 0.05), it suggests the points are not evenly distributed around the line.
+t_test_result <- t.test(CYP2D6_data_doubles$difference_mult, mu = 0)
+print(t_test_result)
+
+# With scores > 1: This t-test shows that on average the click-seq score is higher than the multiplicative score
+# Without scores > 1: no longer a significant difference from 0 -> as of now it does appear consistent with the multiplicative model based off of this result!
+# With the syn and non bounds: The t-test shows that on average the click-seq score is higher than the multiplicative score. mean difference = 0.0687417 and p-value = 6.55e-15
+
+# I want to look at the variants that have click-seq scores close to the multiplicative score
+CYP2D6_data_doubles_small_diff_mult <- CYP2D6_data_doubles %>%
+  mutate(diff = abs(score - multiplicative_score)) %>%  # Create new column for absolute difference
+  filter(diff < 0.05)
+
+```
+
+## Minimum score analysis
+```{r Minimum score analysis}
+# Make the scatterplot of the CYP2D6 score vs. the minimum score
+min_plot <- ggplot(CYP2D6_data_doubles, aes(x = min_score, y = score)) +
+  geom_point(alpha = 0.6) +  # Scatter plot with semi-transparent points
+  geom_abline(intercept = 0, slope = 1, color = "#9C0520", linewidth = 0.7) +  # Solid y=x line
+  theme_minimal() +
+  labs(
+    title = "Click-Seq Activity Score vs Minimum Activity Score",
+    x = "Minimum Activity Score",
+    y = "Click-Seq Activity Score"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    axis.line = element_line(color = "black", linewidth = 0.3)
+  )
+
+# Save the plot
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_minimum_syn_and_non_bounds.png"), plot = min_plot, device = "png", height =4, width = 8, bg = "white")
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_minimum_syn_and_non_bounds.pdf"), plot = min_plot, device = "pdf", height =4, width = 8, bg = "white")
+
+# Get the R-squared
+lm_fit <- lm(score ~ min_score, data = CYP2D6_data_doubles)
+r_squared <- summary(lm_fit)$r.squared
+print(r_squared)
+# w/o scores > 1 = 0.5299028
+# w/ syn and non bounds = 0.4790835 (highest)
+
+# Calculate the difference between the click-seq score and the multiplicative score
+CYP2D6_data_doubles <- CYP2D6_data_doubles %>%
+  mutate(difference_min = score - min_score)
+
+# Perform a one-sample t-test: This will test if the mean of the differences is significantly different from zero. If the p-value is low (usually below 0.05), it suggests the points are not evenly distributed around the line.
+t_test_result <- t.test(CYP2D6_data_doubles$difference_min, mu = 0)
+print(t_test_result)
+
+# With scores > 1: This t-test shows that on average the click-seq score is higher than the minimum score
+# Without scores > 1: Still shows that the click-seq score is higher than the minimum on average, which makes sense since we are taking the minimum. the p-value is much higher though (0.001052)
+# average of the difference = -0.04352459, p-value = 0.001052, 95% CI [-0.06942735 -0.01762183]; click-seq scores tend to be below the line (lower)
+# With syn and non bounds: This t-test shows that on average the click-seq score is higher than the minimum score. the mean difference is 0.06023132 and the p-value = 1.835e-12
+
+# I want to look at the variants that have click-seq scores close to the minimum score
+CYP2D6_data_doubles_small_diff_min <- CYP2D6_data_doubles %>%
+  mutate(diff = abs(score - min_score)) %>%  # Create new column for absolute difference
+  filter(diff < 0.05)
+
+```
+
+
+## Maximum score analysis
+```{r Maximum score analysis}
+# Make the scatterplot of the CYP2D6 score vs. the maximum score
+max_plot <- ggplot(CYP2D6_data_doubles, aes(x = max_score, y = score)) +
+  geom_point(alpha = 0.6) +  # Scatter plot with semi-transparent points
+  geom_abline(intercept = 0, slope = 1, color = "#9C0520", linewidth = 0.7) +  # Solid y=x line
+  theme_minimal() +
+  labs(
+    title = "Click-Seq Activity Score vs Maximum Activity Score",
+    x = "Maximum Activity Score",
+    y = "Click-Seq Activity Score"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    axis.line = element_line(color = "black", linewidth = 0.3)
+  )
+
+# Save the plot
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_maximum_syn_and_non_bounds.png"), plot = max_plot, device = "png", height =4, width = 8, bg = "white")
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_maximum_syn_and_non_bounds.pdf"), plot = max_plot, device = "pdf", height =4, width = 8, bg = "white")
+
+# Get the R-squared
+lm_fit <- lm(score ~ max_score, data = CYP2D6_data_doubles)
+r_squared <- summary(lm_fit)$r.squared
+print(r_squared)
+# w/o scores > 1 = 0.09738455
+# w/ syn and non bounds = 0.1373625
+
+# Calculate the difference between the click-seq score and the multiplicative score
+CYP2D6_data_doubles <- CYP2D6_data_doubles %>%
+  mutate(difference_max = score - max_score)
+
+# Perform a one-sample t-test: This will test if the mean of the differences is significantly different from zero. If the p-value is low (usually below 0.05), it suggests the points are not evenly distributed around the line.
+t_test_result <- t.test(CYP2D6_data_doubles$difference_max, mu = 0)
+print(t_test_result)
+
+# With scores > 1: This t-test shows that on average the click-seq score is lower than the maximum score
+# Without scores > 1: Still shows that the click-seq score is lower than the maximum score on average, but this time the mean difference is much lower (-0.44) with a very significant p-value (2.2e-16)
+# With syn and non bounds: This t-test shows that on average the click-seq score is lower than the maximum score with a mean difference of -0.301847 and a p-value of < 2.2e-16
+
+# I want to look at the variants that have click-seq scores close to the minimum score
+CYP2D6_data_doubles_small_diff_max <- CYP2D6_data_doubles %>%
+  mutate(diff = abs(score - max_score)) %>%  # Create new column for absolute difference
+  filter(diff < 0.05)
+
+```
+
+## Geometric mean analysis
+```{r Geometric mean analysis}
+# Make the scatterplot of the CYP2D6 score vs. the geometric mean
+geom_mean_plot <- ggplot(CYP2D6_data_doubles, aes(x = geometric_mean, y = score)) +
+  geom_point(alpha = 0.6) +  # Scatter plot with semi-transparent points
+  geom_abline(intercept = 0, slope = 1, color = "#9C0520", linewidth = 0.7) +  # Solid y=x line
+  theme_minimal() +
+  labs(
+    title = "Click-Seq Activity Score vs Geometric Mean",
+    x = "Geometric Mean",
+    y = "Click-Seq Activity Score"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    axis.line = element_line(color = "black", linewidth = 0.3)
+  )
+
+# Save the plot
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_geom_mean_syn_and_non_bounds.png"), plot = geom_mean_plot, device = "png", height =4, width = 8, bg = "white")
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_geom_mean_syn_and_non_bounds.pdf"), plot = geom_mean_plot, device = "pdf", height =4, width = 8, bg = "white")
+
+# Get the R-squared
+lm_fit <- lm(score ~ geometric_mean, data = CYP2D6_data_doubles)
+r_squared <- summary(lm_fit)$r.squared
+print(r_squared)
+# w/o scores > 1 = 0.5015102
+# w/ syn and non bounds = 0.4784046 - higher than multiplicative but lower than minimum
+
+# Calculate the difference between the click-seq score and the multiplicative score
+CYP2D6_data_doubles <- CYP2D6_data_doubles %>%
+  mutate(difference_geom = score - geometric_mean)
+
+# Perform a one-sample t-test: This will test if the mean of the differences is significantly different from zero. If the p-value is low (usually below 0.05), it suggests the points are not evenly distributed around the line.
+t_test_result <- t.test(CYP2D6_data_doubles$difference_geom, mu = 0)
+print(t_test_result)
+
+# With scores > 1: This t-test shows that there is no significant difference between the click-seq scores and the geometric mean, so the variants are randomly distributed above and below the line
+# Without scores > 1: Click-seq scores tend to be lower than the geometric mean with a significant p-value (2.2e-16)
+# With syn and non bounds: This t-test shows that the click-seq scores tend to be lower than the geometric mean with a mean difference of -0.06569434 and p-value = 2.021e-14
+
+# I want to look at the variants that have click-seq scores close to the minimum score
+CYP2D6_data_doubles_small_diff_geom <- CYP2D6_data_doubles %>%
+  mutate(diff = abs(score - geometric_mean)) %>%  # Create new column for absolute difference
+  filter(diff < 0.05)
+
+```
+
+## Arithmetic mean analysis
+```{r Arithmetic mean analysis}
+# Make the scatterplot of the CYP2D6 score vs. the arithmetic mean score
+arith_mean_plot <- ggplot(CYP2D6_data_doubles, aes(x = arith_mean, y = score)) +
+  geom_point(alpha = 0.6) +  # Scatter plot with semi-transparent points
+  geom_abline(intercept = 0, slope = 1, color = "#9C0520", linewidth = 0.7) +  # Solid y=x line
+  theme_minimal() +
+  labs(
+    title = "Click-Seq Activity Score vs Arithmetic Mean",
+    x = "Arithmetic Mean",
+    y = "Click-Seq Activity Score"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    axis.line = element_line(color = "black", linewidth = 0.3)
+  )
+
+# Save the plot
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_arith_mean_syn_and_non_bounds.png"), plot = arith_mean_plot, device = "png", height =4, width = 8, bg = "white")
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_arith_mean_syn_and_non_bounds.pdf"), plot = arith_mean_plot, device = "pdf", height =4, width = 8, bg = "white")
+
+# Get the R-squared
+lm_fit <- lm(score ~ arith_mean, data = CYP2D6_data_doubles)
+r_squared <- summary(lm_fit)$r.squared
+print(r_squared)
+# w/o scores > 1 = 0.4486654
+# w/ syn and non bounds = 0.4401106
+
+# Calculate the difference between the click-seq score and the multiplicative score
+CYP2D6_data_doubles <- CYP2D6_data_doubles %>%
+  mutate(difference_arith = score - arith_mean)
+
+# Perform a one-sample t-test: This will test if the mean of the differences is significantly different from zero. If the p-value is low (usually below 0.05), it suggests the points are not evenly distributed around the line.
+t_test_result <- t.test(CYP2D6_data_doubles$difference_arith, mu = 0)
+print(t_test_result)
+
+# With scores > 1: This t-test shows that the click-seq score tends to be lower than the additive score
+# WIthout scores > 1: Shows the same thing
+# With syn and non bounds: This t-test shows that on average the click-seq score is lower than the arithmetic mean with a mean difference of -0.1208079 and p-value < < 2.2e-16
+
+# I want to look at the variants that have click-seq scores close to the minimum score
+CYP2D6_data_doubles_small_diff_arith <- CYP2D6_data_doubles %>%
+  mutate(diff = abs(score - arith_mean)) %>%  # Create new column for absolute difference
+  filter(diff < 0.05)
+
+```
+
+## Log transformed analysis
+```{r Log transformed analysis}
+# Make the scatterplot of the CYP2D6 score vs. the log transformed additive mean score
+log_additivity_plot <- ggplot(CYP2D6_data_doubles, aes(x = log_additivity, y = score)) +
+  geom_point(alpha = 0.6) +  # Scatter plot with semi-transparent points
+  geom_abline(intercept = 0, slope = 1, color = "#9C0520", linewidth = 0.7) +  # Solid y=x line
+  theme_minimal() +
+  labs(
+    title = "Click-Seq Activity Score vs Log-Transformed Additive Mean",
+    x = "Log-Transformed Additive Mean",
+    y = "Click-Seq Activity Score"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    axis.line = element_line(color = "black", linewidth = 0.3)
+  )
+
+# Save the plot
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_log_mean_syn_and_non_bounds.png"), plot = log_additivity_plot, device = "png", height =4, width = 8, bg = "white")
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_log_mean_syn_and_non_bounds.pdf"), plot = log_additivity_plot, device = "pdf", height =4, width = 8, bg = "white")
+
+# Get the R-squared
+lm_fit <- lm(score ~ log_additivity, data = CYP2D6_data_doubles)
+r_squared <- summary(lm_fit)$r.squared
+print(r_squared)
+# w/o scores > 1 = 0.5015102 - same as for arithmetic mean, the acitivty scores do not go up exponentially
+# w/ syn and non bounds = 0.4784046 - same as for geometric mean, so higher than multiplicative but lower than minimum, huh
+
+# Calculate the difference between the click-seq score and the multiplicative score
+CYP2D6_data_doubles <- CYP2D6_data_doubles %>%
+  mutate(difference_log = score - log_additivity)
+
+# Perform a one-sample t-test: This will test if the mean of the differences is significantly different from zero. If the p-value is low (usually below 0.05), it suggests the points are not evenly distributed around the line.
+t_test_result <- t.test(CYP2D6_data_doubles$difference_log, mu = 0)
+print(t_test_result)
+
+# With scores > 1: This t-test shows that the mean difference is not significantly different from 0. (p = 0.5039, mean = -0.00875, CI = [-0.0345, 0.0169]) show no significant deviation from zero
+# Without scores > 1: Shows that the click-seq score is significantly lower than the log mean score
+# With syn and non bounds: This t-test shows that on average the click-seq score is lower than the log-transformed additive mean with a mean difference of -0.06569434 and p-value = 2.021e-14
+
+# I want to look at the variants that have click-seq scores close to the minimum score
+CYP2D6_data_doubles_small_diff_arith <- CYP2D6_data_doubles %>%
+  mutate(diff = abs(score - arith_mean)) %>%  # Create new column for absolute difference
+  filter(diff < 0.05)
+
+```
+
+### Filter out doubles and singles that have "possibly" in their activity class
+```{r filter out "possibly"'s}
+
+# Begin with running the first 4 chunks of this file to get CYP2D6_data_doubles
+CYP2D6_data_doubles_filtered <- CYP2D6_data_doubles %>%
+  filter(
+    !grepl("^possibly", activity_class) &
+    !grepl("^possibly", activity_class_var_1) &
+    !grepl("^possibly", activity_class_var_2)
+  )
+```
+
+### Now remake all plots with this subset (no possibly's)
+```{r Calculate the scores}
+# Get the multiplicative score
+CYP2D6_data_doubles_filtered <- CYP2D6_data_doubles_filtered %>%
+  mutate(multiplicative_score = ifelse(!is.na(score_var_1) & !is.na(score_var_2), 
+                                  score_var_1 * score_var_2, 
+                                  NA))
+
+# Get the minimum score
+CYP2D6_data_doubles_filtered <- CYP2D6_data_doubles_filtered %>%
+  mutate(min_score = ifelse(!is.na(score_var_1) & !is.na(score_var_2), pmin(score_var_1, score_var_2), NA))
+
+# Get the maximum score
+CYP2D6_data_doubles_filtered <- CYP2D6_data_doubles_filtered %>%
+  mutate(max_score = ifelse(!is.na(score_var_1) & !is.na(score_var_2), pmax(score_var_1, score_var_2), NA))
+
+# Calculate the geometric mean
+CYP2D6_data_doubles_filtered <- CYP2D6_data_doubles_filtered %>%
+  mutate(geometric_mean = ifelse(!is.na(score_var_1) & !is.na(score_var_2) & 
+                                 score_var_1 > 0 & score_var_2 > 0, 
+                                 sqrt(score_var_1 * score_var_2), 
+                                 NA))
+
+# Calculate the arithmetic mean
+CYP2D6_data_doubles_filtered <- CYP2D6_data_doubles_filtered %>%
+  mutate(arith_mean = ifelse(!is.na(score_var_1) & !is.na(score_var_2), 
+                             (score_var_1 + score_var_2) / 2, 
+                             NA))
+
+# Calculate the log-transformed additive mean
+CYP2D6_data_doubles_filtered <- CYP2D6_data_doubles_filtered %>%
+  mutate(log_additivity = ifelse(!is.na(score_var_1) & !is.na(score_var_2) & score_var_1 > 0 & score_var_2 > 0, 
+                                 exp((log(score_var_1) + log(score_var_2)) / 2), 
+                                 NA))
+
+# Save this file with the doubles scores + the scores for the respective mutants + all the different types of scores
+# w/o possibly's
+write.table(CYP2D6_data_doubles, file = file.path(path, "Final_Scores/20251106_Pacybara_CYP2D6_activity_scores_doubles_12_8.231228e-05_2expts_softfilter_MINQUAL67_respectivesingles_allscoretypes_nopossiblys.csv"),sep = "\t", quote = FALSE, row.names = F, col.names = T)
+
+```
+
+## Redo all of the analyses with this subset as well
+## Multiplicative score analysis
+```{r Multiplicative score analysis}
+# Make the scatterplot of the CYP2D6 score vs. the multiplicative score
+mult_plot <- ggplot(CYP2D6_data_doubles_filtered, aes(x = multiplicative_score, y = score)) +
+  geom_point(alpha = 0.6) +  # Scatter plot with semi-transparent points
+  geom_abline(intercept = 0, slope = 1, color = "#9C0520", linewidth = 0.7) +  # Solid y=x line
+  theme_minimal() +
+  labs(
+    title = "Click-Seq Activity Score vs Multiplicative Score (filtered)",
+    x = "Multiplicative Score",
+    y = "Click-Seq Activity Score"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    axis.line = element_line(color = "black", linewidth = 0.3)
+  )
+
+# Save the plot
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_multiplicative_syn_and_non_bounds_no_possibly.png"), plot = mult_plot, device = "png", height =4, width = 8, bg = "white")
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_multiplicative_syn_and_non_bounds_no_possibly.pdf"), plot = mult_plot, device = "pdf", height =4, width = 8, bg = "white")
+
+# Get the R-squared
+lm_fit <- lm(score ~ multiplicative_score, data = CYP2D6_data_doubles_filtered)
+r_squared <- summary(lm_fit)$r.squared
+print(r_squared)
+# w/o scores > 1 = 0.5284907
+# w syn and non bounds = 0.4650935
+# w/o possibly: 0.6632713
+
+# Calculate the difference between the click-seq score and the multiplicative score
+CYP2D6_data_doubles_filtered <- CYP2D6_data_doubles_filtered %>%
+  mutate(difference_mult = score - multiplicative_score)
+
+# Perform a one-sample t-test: This will test if the mean of the differences is significantly different from zero. If the p-value is low (usually below 0.05), it suggests the points are not evenly distributed around the line.
+t_test_result <- t.test(CYP2D6_data_doubles_filtered$difference_mult, mu = 0)
+print(t_test_result)
+
+# With scores > 1: This t-test shows that on average the click-seq score is higher than the multiplicative score
+# Without scores > 1: no longer a significant difference from 0 -> as of now it does appear consistent with the multiplicative model based off of this result!
+# With the syn and non bounds: The t-test shows that on average the click-seq score is higher than the multiplicative score. mean difference = 0.0687417 and p-value = 6.55e-15
+# w/o possibly: no significant difference, mean diff = 0.02632629, p-value = 0.1532
+
+# I want to look at the variants that have click-seq scores close to the multiplicative score
+CYP2D6_data_doubles_filtered_small_diff_mult <- CYP2D6_data_doubles_filtered %>%
+  mutate(diff = abs(score - multiplicative_score)) %>%  # Create new column for absolute difference
+  filter(diff < 0.05)
+
+```
+
+## Minimum score analysis
+```{r Minimum score analysis}
+# Make the scatterplot of the CYP2D6 score vs. the minimum score
+min_plot <- ggplot(CYP2D6_data_doubles_filtered, aes(x = min_score, y = score)) +
+  geom_point(alpha = 0.6) +  # Scatter plot with semi-transparent points
+  geom_abline(intercept = 0, slope = 1, color = "#9C0520", linewidth = 0.7) +  # Solid y=x line
+  theme_minimal() +
+  labs(
+    title = "Click-Seq Activity Score vs Minimum Activity Score (filtered)",
+    x = "Minimum Activity Score",
+    y = "Click-Seq Activity Score"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    axis.line = element_line(color = "black", linewidth = 0.3)
+  )
+
+# Save the plot
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_minimum_syn_and_non_bounds_no_possibly.png"), plot = min_plot, device = "png", height =4, width = 8, bg = "white")
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_minimum_syn_and_non_bounds_no_possibly.pdf"), plot = min_plot, device = "pdf", height =4, width = 8, bg = "white")
+
+# Get the R-squared
+lm_fit <- lm(score ~ min_score, data = CYP2D6_data_doubles_filtered)
+r_squared <- summary(lm_fit)$r.squared
+print(r_squared)
+# w/o scores > 1 = 0.5299028
+# w/ syn and non bounds = 0.4790835 (highest)
+# w/o possibly = 0.6757666
+
+# Calculate the difference between the click-seq score and the multiplicative score
+CYP2D6_data_doubles_filtered <- CYP2D6_data_doubles_filtered %>%
+  mutate(difference_min = score - min_score)
+
+# Perform a one-sample t-test: This will test if the mean of the differences is significantly different from zero. If the p-value is low (usually below 0.05), it suggests the points are not evenly distributed around the line.
+t_test_result <- t.test(CYP2D6_data_doubles_filtered$difference_min, mu = 0)
+print(t_test_result)
+
+# With scores > 1: This t-test shows that on average the click-seq score is higher than the minimum score
+# Without scores > 1: Still shows that the click-seq score is higher than the minimum on average, which makes sense since we are taking the minimum. the p-value is much higher though (0.001052)
+# average of the difference = -0.04352459, p-value = 0.001052, 95% CI [-0.06942735 -0.01762183]; click-seq scores tend to be below the line (lower)
+# With syn and non bounds: This t-test shows that on average the click-seq score is higher than the minimum score. the mean difference is 0.06023132 and the p-value = 1.835e-12
+# w/o possibly: click-seq tends to be higher, mean diff = 0.04334233, p-value = 0.01727
+
+# I want to look at the variants that have click-seq scores close to the minimum score
+CYP2D6_data_doubles_filtered_small_diff_min <- CYP2D6_data_doubles_filtered %>%
+  mutate(diff = abs(score - min_score)) %>%  # Create new column for absolute difference
+  filter(diff < 0.05)
+
+```
+
+## Maximum score analysis
+```{r Maximum score analysis}
+# Make the scatterplot of the CYP2D6 score vs. the maximum score
+max_plot <- ggplot(CYP2D6_data_doubles_filtered, aes(x = max_score, y = score)) +
+  geom_point(alpha = 0.6) +  # Scatter plot with semi-transparent points
+  geom_abline(intercept = 0, slope = 1, color = "#9C0520", linewidth = 0.7) +  # Solid y=x line
+  theme_minimal() +
+  labs(
+    title = "Click-Seq Activity Score vs Maximum Activity Score (filtered)",
+    x = "Maximum Activity Score",
+    y = "Click-Seq Activity Score"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    axis.line = element_line(color = "black", linewidth = 0.3)
+  )
+
+# Save the plot
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_maximum_syn_and_non_bounds_no_possibly.png"), plot = max_plot, device = "png", height =4, width = 8, bg = "white")
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_maximum_syn_and_non_bounds_no_possibly.pdf"), plot = max_plot, device = "pdf", height =4, width = 8, bg = "white")
+
+# Get the R-squared
+lm_fit <- lm(score ~ max_score, data = CYP2D6_data_doubles_filtered)
+r_squared <- summary(lm_fit)$r.squared
+print(r_squared)
+# w/o scores > 1 = 0.09738455
+# w/ syn and non bounds = 0.1373625
+# w/o possibly = 0.1030179
+
+# Calculate the difference between the click-seq score and the multiplicative score
+CYP2D6_data_doubles_filtered <- CYP2D6_data_doubles_filtered %>%
+  mutate(difference_max = score - max_score)
+
+# Perform a one-sample t-test: This will test if the mean of the differences is significantly different from zero. If the p-value is low (usually below 0.05), it suggests the points are not evenly distributed around the line.
+t_test_result <- t.test(CYP2D6_data_doubles_filtered$difference_max, mu = 0)
+print(t_test_result)
+
+# With scores > 1: This t-test shows that on average the click-seq score is lower than the maximum score
+# Without scores > 1: Still shows that the click-seq score is lower than the maximum score on average, but this time the mean difference is much lower (-0.44) with a very significant p-value (2.2e-16)
+# With syn and non bounds: This t-test shows that on average the click-seq score is lower than the maximum score with a mean difference of -0.301847 and a p-value of < 2.2e-16
+# w/o possibly: click-seq lower, mean difference = -0.457859, p-value < 2.2e-16
+
+# I want to look at the variants that have click-seq scores close to the minimum score
+CYP2D6_data_doubles_filtered_small_diff_max <- CYP2D6_data_doubles_filtered %>%
+  mutate(diff = abs(score - max_score)) %>%  # Create new column for absolute difference
+  filter(diff < 0.05)
+
+```
+
+## Geometric mean analysis
+```{r Geometric mean analysis}
+# Make the scatterplot of the CYP2D6 score vs. the geometric mean
+geom_mean_plot <- ggplot(CYP2D6_data_doubles_filtered, aes(x = geometric_mean, y = score)) +
+  geom_point(alpha = 0.6) +  # Scatter plot with semi-transparent points
+  geom_abline(intercept = 0, slope = 1, color = "#9C0520", linewidth = 0.7) +  # Solid y=x line
+  theme_minimal() +
+  labs(
+    title = "Click-Seq Activity Score vs Geometric Mean (filtered)",
+    x = "Geometric Mean",
+    y = "Click-Seq Activity Score"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    axis.line = element_line(color = "black", linewidth = 0.3)
+  )
+
+# Save the plot
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_geom_mean_syn_and_non_bounds_no_possibly.png"), plot = geom_mean_plot, device = "png", height =4, width = 8, bg = "white")
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_geom_mean_syn_and_non_bounds_no_possibly.pdf"), plot = geom_mean_plot, device = "pdf", height =4, width = 8, bg = "white")
+
+# Get the R-squared
+lm_fit <- lm(score ~ geometric_mean, data = CYP2D6_data_doubles_filtered)
+r_squared <- summary(lm_fit)$r.squared
+print(r_squared)
+# w/o scores > 1 = 0.5015102
+# w/ syn and non bounds = 0.4784046 - higher than multiplicative but lower than minimum
+# w/o possibly = 0.6244659
+
+# Calculate the difference between the click-seq score and the multiplicative score
+CYP2D6_data_doubles_filtered <- CYP2D6_data_doubles_filtered %>%
+  mutate(difference_geom = score - geometric_mean)
+
+# Perform a one-sample t-test: This will test if the mean of the differences is significantly different from zero. If the p-value is low (usually below 0.05), it suggests the points are not evenly distributed around the line.
+t_test_result <- t.test(CYP2D6_data_doubles_filtered$difference_geom, mu = 0)
+print(t_test_result)
+
+# With scores > 1: This t-test shows that there is no significant difference between the click-seq scores and the geometric mean, so the variants are randomly distributed above and below the line
+# Without scores > 1: Click-seq scores tend to be lower than the geometric mean with a significant p-value (2.2e-16)
+# With syn and non bounds: This t-test shows that the click-seq scores tend to be lower than the geometric mean with a mean difference of -0.06569434 and p-value = 2.021e-14
+# w/o possibly: click-seq lower, mean diff = -0.09964788, p-value = 2.58e-06
+
+# I want to look at the variants that have click-seq scores close to the minimum score
+CYP2D6_data_doubles_filtered_small_diff_geom <- CYP2D6_data_doubles_filtered %>%
+  mutate(diff = abs(score - geometric_mean)) %>%  # Create new column for absolute difference
+  filter(diff < 0.05)
+
+```
+
+## Arithmetic mean analysis
+```{r Arithmetic mean analysis}
+# Make the scatterplot of the CYP2D6 score vs. the arithmetic mean score
+arith_mean_plot <- ggplot(CYP2D6_data_doubles_filtered, aes(x = arith_mean, y = score)) +
+  geom_point(alpha = 0.6) +  # Scatter plot with semi-transparent points
+  geom_abline(intercept = 0, slope = 1, color = "#9C0520", linewidth = 0.7) +  # Solid y=x line
+  theme_minimal() +
+  labs(
+    title = "Click-Seq Activity Score vs Arithmetic Mean",
+    x = "Arithmetic Mean",
+    y = "Click-Seq Activity Score"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    axis.line = element_line(color = "black", linewidth = 0.3)
+  )
+
+# Save the plot
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_arith_mean_syn_and_non_bounds_no_possibly.png"), plot = arith_mean_plot, device = "png", height =4, width = 8, bg = "white")
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_arith_mean_syn_and_non_bounds_no_possibly.pdf"), plot = arith_mean_plot, device = "pdf", height =4, width = 8, bg = "white")
+
+# Get the R-squared
+lm_fit <- lm(score ~ arith_mean, data = CYP2D6_data_doubles_filtered)
+r_squared <- summary(lm_fit)$r.squared
+print(r_squared)
+# w/o scores > 1 = 0.4486654
+# w/ syn and non bounds = 0.4401106
+# w/o possibly = 0.5627399
+
+# Calculate the difference between the click-seq score and the multiplicative score
+CYP2D6_data_doubles_filtered <- CYP2D6_data_doubles_filtered %>%
+  mutate(difference_arith = score - arith_mean)
+
+# Perform a one-sample t-test: This will test if the mean of the differences is significantly different from zero. If the p-value is low (usually below 0.05), it suggests the points are not evenly distributed around the line.
+t_test_result <- t.test(CYP2D6_data_doubles_filtered$difference_arith, mu = 0)
+print(t_test_result)
+
+# With scores > 1: This t-test shows that the click-seq score tends to be lower than the additive score
+# WIthout scores > 1: Shows the same thing
+# With syn and non bounds: This t-test shows that on average the click-seq score is lower than the arithmetic mean with a mean difference of -0.1208079 and p-value < < 2.2e-16
+# w/o possibly: click-seq is lower, mean diff = -0.2072583, p-value < 2.2e-16
+
+# I want to look at the variants that have click-seq scores close to the minimum score
+CYP2D6_data_doubles_filtered_small_diff_arith <- CYP2D6_data_doubles_filtered %>%
+  mutate(diff = abs(score - arith_mean)) %>%  # Create new column for absolute difference
+  filter(diff < 0.05)
+
+```
+
+## Log transformed analysis
+```{r Log transformed analysis}
+# Make the scatterplot of the CYP2D6 score vs. the log transformed additive mean score
+log_additivity_plot <- ggplot(CYP2D6_data_doubles_filtered, aes(x = log_additivity, y = score)) +
+  geom_point(alpha = 0.6) +  # Scatter plot with semi-transparent points
+  geom_abline(intercept = 0, slope = 1, color = "#9C0520", linewidth = 0.7) +  # Solid y=x line
+  theme_minimal() +
+  labs(
+    title = "Click-Seq Activity Score vs Log-Transformed Additive Mean",
+    x = "Log-Transformed Additive Mean",
+    y = "Click-Seq Activity Score"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    axis.line = element_line(color = "black", linewidth = 0.3)
+  )
+
+# Save the plot
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_log_mean_syn_and_non_bounds_no_possibly.png"), plot = log_additivity_plot, device = "png", height =4, width = 8, bg = "white")
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_log_mean_syn_and_non_bounds_no_possibly.pdf"), plot = log_additivity_plot, device = "pdf", height =4, width = 8, bg = "white")
+
+# Get the R-squared
+lm_fit <- lm(score ~ log_additivity, data = CYP2D6_data_doubles_filtered)
+r_squared <- summary(lm_fit)$r.squared
+print(r_squared)
+# w/o scores > 1 = 0.5015102 - same as for arithmetic mean, the acitivty scores do not go up exponentially
+# w/ syn and non bounds = 0.4784046 - same as for geometric mean, so higher than multiplicative but lower than minimum, huh
+# w/o possibly = 0.6244659 - same as geom mean??
+
+# Calculate the difference between the click-seq score and the multiplicative score
+CYP2D6_data_doubles_filtered <- CYP2D6_data_doubles_filtered %>%
+  mutate(difference_log = score - log_additivity)
+
+# Perform a one-sample t-test: This will test if the mean of the differences is significantly different from zero. If the p-value is low (usually below 0.05), it suggests the points are not evenly distributed around the line.
+t_test_result <- t.test(CYP2D6_data_doubles_filtered$difference_log, mu = 0)
+print(t_test_result)
+
+# With scores > 1: This t-test shows that the mean difference is not significantly different from 0. (p = 0.5039, mean = -0.00875, CI = [-0.0345, 0.0169]) show no significant deviation from zero
+# Without scores > 1: Shows that the click-seq score is significantly lower than the log mean score
+# With syn and non bounds: This t-test shows that on average the click-seq score is lower than the log-transformed additive mean with a mean difference of -0.06569434 and p-value = 2.021e-14
+# w/o possibly: click-seq lower, mean diff = -0.09964788, p-value = 2.58e-06 (same as geom_mean??)
+
+# I want to look at the variants that have click-seq scores close to the minimum score
+CYP2D6_data_doubles_filtered_small_diff_arith <- CYP2D6_data_doubles_filtered %>%
+  mutate(diff = abs(score - arith_mean)) %>%  # Create new column for absolute difference
+  filter(diff < 0.05)
+
+```
+
+## subset to nonsense and synonymous w/o possibly
+```{r subset to nonsense and synonymous + something else}
+# Begin with running the first 4 chunks of this file to get CYP2D6_data_doubles
+
+# Filter out "possibly" in the activity_class of the double and the singles
+# Do we want to do this here?? Starting with this for now, to make sure we are working with the absolute best pickings
+CYP2D6_data_doubles_filtered <- CYP2D6_data_doubles %>%
+  filter(
+    !grepl("^possibly", activity_class) &
+    !grepl("^possibly", activity_class_var_1) &
+    !grepl("^possibly", activity_class_var_2)
+  )
+
+# Remove NAs
+CYP2D6_data_doubles_filtered <- na.omit(CYP2D6_data_doubles_filtered)
+
+# Calculate the scores
+# Get the multiplicative score
+CYP2D6_data_doubles_filtered <- CYP2D6_data_doubles_filtered %>%
+  mutate(multiplicative_score = ifelse(!is.na(score_var_1) & !is.na(score_var_2), 
+                                  score_var_1 * score_var_2, 
+                                  NA))
+
+# Get the minimum score
+CYP2D6_data_doubles_filtered <- CYP2D6_data_doubles_filtered %>%
+  mutate(min_score = ifelse(!is.na(score_var_1) & !is.na(score_var_2), pmin(score_var_1, score_var_2), NA))
+
+# Get the maximum score
+CYP2D6_data_doubles_filtered <- CYP2D6_data_doubles_filtered %>%
+  mutate(max_score = ifelse(!is.na(score_var_1) & !is.na(score_var_2), pmax(score_var_1, score_var_2), NA))
+
+# Calculate the geometric mean
+CYP2D6_data_doubles_filtered <- CYP2D6_data_doubles_filtered %>%
+  mutate(geometric_mean = ifelse(!is.na(score_var_1) & !is.na(score_var_2) & 
+                                 score_var_1 > 0 & score_var_2 > 0, 
+                                 sqrt(score_var_1 * score_var_2), 
+                                 NA))
+
+# Calculate the arithmetic mean
+CYP2D6_data_doubles_filtered <- CYP2D6_data_doubles_filtered %>%
+  mutate(arith_mean = ifelse(!is.na(score_var_1) & !is.na(score_var_2), 
+                             (score_var_1 + score_var_2) / 2, 
+                             NA))
+
+# Calculate the log-transformed additive mean
+CYP2D6_data_doubles_filtered <- CYP2D6_data_doubles_filtered %>%
+  mutate(log_additivity = ifelse(!is.na(score_var_1) & !is.na(score_var_2) & score_var_1 > 0 & score_var_2 > 0, 
+                                 exp((log(score_var_1) + log(score_var_2)) / 2), 
+                                 NA))
+
+# Subset variants that are synonymous + synonymous 
+# do these exist? they do! there are 2 of these doubles, both of them have P489P as one of the variants, and both of them are increased function!! weird..
+CYP2D6_data_doubles_filtered_both_syn <- CYP2D6_data_doubles_filtered[CYP2D6_data_doubles_filtered$class_var_1 == "synonymous" & CYP2D6_data_doubles_filtered$class_var_2 == "synonymous", ]
+
+# Classify this subset by adding the "group" column
+CYP2D6_data_doubles_filtered_both_syn$group <- "both_syn"
+
+# Subset variants that are nonsense + nonsense
+# There are none if we filter out "possibly"s
+CYP2D6_data_doubles_filtered_both_non <- CYP2D6_data_doubles_filtered[CYP2D6_data_doubles_filtered$class_var_1 == "nonsense" & CYP2D6_data_doubles_filtered$class_var_2 == "nonsense", ]
+
+# Classify this subset by adding the "group" column
+#CYP2D6_data_doubles_filtered_both_non$group <- "both_non"
+
+# Subset variants that are synonymous + nonsense
+# CYP2D6_data_doubles_filtered_syn_and_non <- CYP2D6_data_doubles_filtered[
+#   (CYP2D6_data_doubles_filtered$class_var_1 == "synonymous" & 
+#    CYP2D6_data_doubles_filtered$class_var_2 == "nonsense") |
+#   (CYP2D6_data_doubles_filtered$class_var_1 == "nonsense" & 
+#    CYP2D6_data_doubles_filtered$class_var_2 == "synonymous"), 
+#   ]
+
+# Classify this subset by adding the "group" column
+#CYP2D6_data_doubles_filtered_syn_and_non$group <- "syn_and_non"
+
+# Subset variants that are synonymous + missense, frameshift, or nonsense
+CYP2D6_data_doubles_filtered_one_syn <- CYP2D6_data_doubles_filtered[
+  (CYP2D6_data_doubles_filtered$class_var_1 == "synonymous" & 
+   CYP2D6_data_doubles_filtered$class_var_2 %in% c("missense", "frameshift")) |
+  (CYP2D6_data_doubles_filtered$class_var_1 %in% c("missense", "frameshift") & 
+   CYP2D6_data_doubles_filtered$class_var_2 == "synonymous"), 
+  ]
+
+# Classify this subset by adding the "group" column
+CYP2D6_data_doubles_filtered_one_syn$group <- "one_syn"
+
+# Subset variants that are nonsense + missense, frameshift, or synonymous
+CYP2D6_data_doubles_filtered_one_non <- CYP2D6_data_doubles_filtered[
+  (CYP2D6_data_doubles_filtered$class_var_1 == "nonsense" & 
+   CYP2D6_data_doubles_filtered$class_var_2 %in% c("missense", "frameshift")) |
+  (CYP2D6_data_doubles_filtered$class_var_1 %in% c("missense", "frameshift") & 
+   CYP2D6_data_doubles_filtered$class_var_2 == "nonsense"), 
+  ]
+
+# Classify this subset by adding the "group" column
+CYP2D6_data_doubles_filtered_one_non$group <- "one_non"
+
+# Combine all of these subsets together 
+CYP2D6_data_doubles_filtered_combined <- rbind(
+  CYP2D6_data_doubles_filtered_both_syn,
+  #CYP2D6_data_doubles_filtered_both_non,
+  #CYP2D6_data_doubles_filtered_syn_and_non,
+  CYP2D6_data_doubles_filtered_one_syn,
+  CYP2D6_data_doubles_filtered_one_non
+)
+
+# Make the scatterplot of the CYP2D6 score vs. the multiplicative score
+subset_mult_plot <- ggplot(
+  CYP2D6_data_doubles_filtered_combined,
+  aes(x = multiplicative_score, y = score, color = group)
+) +
+  geom_point(alpha = 0.8, size = 2.5) +
+  geom_abline(intercept = 0, slope = 1, color = "#9C0520", linewidth = 0.7) +
+  theme_minimal() +
+  labs(
+    title  = "Click-Seq Score vs Multiplicative Score for Synonymous and Nonsense Variants",
+    x      = "Multiplicative Score",
+    y      = "Click-Seq Activity Score"
+  ) +
+  scale_color_manual(
+    values = c(
+      "both_syn"     = "blue",
+      "one_syn"      = "#A353C2",
+      "one_non"      = "red"
+    ),
+    labels = c(
+      "both_syn"     = "Both Synonymous",
+      "one_syn"      = "One Synonymous",
+      "one_non"      = "One Nonsense"
+    ),
+    breaks = c("both_syn", "one_syn", "one_non"),  # <- legend order
+    name = "Variant Types"
+  ) +
+  guides(
+    color = guide_legend(override.aes = list(size = 3.5, alpha = 0.8))
+    # size = 5 makes the dots in the legend bigger
+    # alpha = 1 makes sure they’re not faint in the legend
+  ) +
+  theme(
+    plot.title   = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title   = element_text(size = 12, face = "bold"),
+    axis.text    = element_text(size = 10),
+    axis.line    = element_line(color = "black", linewidth = 0.3),
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text  = element_text(size = 12)
+  )
+
+print(subset_mult_plot)
+
+
+# Save the plot
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_multiplicative_syn_and_non_bounds_no_possibly_control_set.png"), plot = subset_mult_plot, device = "png", height =4, width = 8, bg = "white")
+ggsave(file = file.path(path, "Final_Plots/20251106_clickseq_v_multiplicative_syn_and_non_bounds_no_possibly_control_set.pdf"), plot = subset_mult_plot, device = "pdf", height =4, width = 8, bg = "white")
+
+```
+
+## Subsets of nonsense and synonymous w/ possibly
+```{r subset to nonsense and synonymous + something else}
+# Begin with running the first 4 chunks of this file to get CYP2D6_data_doubles
+
+# Remove NAs
+CYP2D6_data_doubles <- na.omit(CYP2D6_data_doubles)
+
+# Subset variants that are synonymous + synonymous 
+# do these exist? they do! there are 2 of these doubles, both of them have P489P as one of the variants, and both of them are increased function!! weird..
+CYP2D6_data_doubles_both_syn <- CYP2D6_data_doubles[CYP2D6_data_doubles$class_var_1 == "synonymous" & CYP2D6_data_doubles$class_var_2 == "synonymous", ]
+
+# Classify this subset by adding the "group" column
+CYP2D6_data_doubles_both_syn$group <- "both_syn"
+
+# Subset variants that are nonsense + nonsense
+# There are none if we filter out "possibly"s
+CYP2D6_data_doubles_both_non <- CYP2D6_data_doubles[CYP2D6_data_doubles$class_var_1 == "nonsense" & CYP2D6_data_doubles$class_var_2 == "nonsense", ]
+
+# Classify this subset by adding the "group" column
+#CYP2D6_data_doubles_both_non$group <- "both_non"
+
+# Subset variants that are synonymous + nonsense
+CYP2D6_data_doubles_syn_and_non <- CYP2D6_data_doubles[
+  (CYP2D6_data_doubles$class_var_1 == "synonymous" &
+   CYP2D6_data_doubles$class_var_2 == "nonsense") |
+  (CYP2D6_data_doubles$class_var_1 == "nonsense" &
+   CYP2D6_data_doubles$class_var_2 == "synonymous"),
+  ]
+
+# Classify this subset by adding the "group" column
+CYP2D6_data_doubles_syn_and_non$group <- "syn_and_non"
+
+# Subset variants that are synonymous + missense, frameshift, or nonsense
+CYP2D6_data_doubles_one_syn <- CYP2D6_data_doubles[
+  (CYP2D6_data_doubles$class_var_1 == "synonymous" & 
+   CYP2D6_data_doubles$class_var_2 %in% c("missense", "frameshift")) |
+  (CYP2D6_data_doubles$class_var_1 %in% c("missense", "frameshift") & 
+   CYP2D6_data_doubles$class_var_2 == "synonymous"), 
+  ]
+
+# Classify this subset by adding the "group" column
+CYP2D6_data_doubles_one_syn$group <- "one_syn"
+
+# Subset variants that are nonsense + missense, frameshift, or synonymous
+CYP2D6_data_doubles_one_non <- CYP2D6_data_doubles[
+  (CYP2D6_data_doubles$class_var_1 == "nonsense" & 
+   CYP2D6_data_doubles$class_var_2 %in% c("missense", "frameshift")) |
+  (CYP2D6_data_doubles$class_var_1 %in% c("missense", "frameshift") & 
+   CYP2D6_data_doubles$class_var_2 == "nonsense"), 
+  ]
+
+# Classify this subset by adding the "group" column
+CYP2D6_data_doubles_one_non$group <- "one_non"
+
+# Combine all of these subsets together 
+CYP2D6_data_doubles_combined <- rbind(
+  CYP2D6_data_doubles_both_syn,
+  #CYP2D6_data_doubles_both_non,
+  CYP2D6_data_doubles_syn_and_non,
+  CYP2D6_data_doubles_one_syn,
+  CYP2D6_data_doubles_one_non
+)
+
+# Make the scatterplot of the CYP2D6 score vs. the multiplicative score
+subset_mult_plot <- ggplot(
+  CYP2D6_data_doubles_combined,
+  aes(x = multiplicative_score, y = score, color = group)
+) +
+  geom_point(alpha = 0.8, size = 2.5) +
+  geom_abline(intercept = 0, slope = 1, color = "#9C0520", linewidth = 0.7) +
+  theme_minimal() +
+  labs(
+    title  = "Click-Seq Score vs Multiplicative Score for Synonymous and Nonsense Variants",
+    x      = "Multiplicative Score",
+    y      = "Click-Seq Activity Score"
+  ) +
+  scale_color_manual(
+    values = c(
+      "both_syn"     = "blue",
+      "one_syn"      = "#BC13FE",
+      "syn_and_non"  =  "#FF5F1F",
+      "one_non"      = "red",
+      "both_non"     = "#A10303"
+    ),
+    labels = c(
+      "both_syn"     = "Both Synonymous",
+      "one_syn"      = "One Synonymous",
+      "syn_and_non"  = "Synonymous + Nonsense",
+      "one_non"      = "One Nonsense",
+      "both_non"     = "Both Nonsense"
+    ),
+    breaks = c("both_syn", "one_syn", "syn_and_non", "one_non", "both_non"),  # <- legend order
+    name = "Variant Types"
+  ) +
+  guides(
+    color = guide_legend(override.aes = list(size = 3.5, alpha = 0.8))
+  ) +
+  theme(
+    plot.title   = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title   = element_text(size = 12, face = "bold"),
+    axis.text    = element_text(size = 10),
+    axis.line    = element_line(color = "black", linewidth = 0.3),
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text  = element_text(size = 12),
+    panel.background = element_rect(fill = "transparent", color = NA),
+    plot.background  = element_rect(fill = "transparent", color = NA),
+    legend.background = element_rect(fill = "transparent", color = NA),
+    legend.key = element_rect(fill = "transparent", color = NA)
+  )
+
+print(subset_mult_plot)
+
+##F2672C" old syn_and_non
+##A353C2" old one_syn
+
+
+# Save the plot
+ggsave(file = file.path(path, "Final_Plots/20251224_clickseq_v_multiplicative_syn_and_non_bounds_control_set.png"), plot = subset_mult_plot, device = "png", height =4, width = 8)
+ggsave(file = file.path(path, "Final_Plots/20251224_clickseq_v_multiplicative_syn_and_non_bounds_control_set.pdf"), plot = subset_mult_plot, device = "pdf", height =4, width = 8)
+
+```
+
+### Plot the distributions of activity class for our control set
+```{r activity class distribution}
+# Many of the doubles were assigned an increased activity class based on their click-seq result so now I want to look at the activity class distribution of our control set made up of synonymous + something and nonsense + something doubles - but I want to plot these distributions by the groups
+
+# Set the order for activity_class
+CYP2D6_data_doubles_filtered_combined$activity_class <- factor(CYP2D6_data_doubles_filtered_combined$activity_class,levels = c("nonsense-like", "decreased", "wt-like", "increased"))
+
+
+# Bar plot for all groups together
+subset_bar_plot_all <- ggplot(CYP2D6_data_doubles_filtered_combined, aes(x = activity_class, fill = activity_class)) +
+  geom_bar(aes(y = ..count..), stat = "count") +  # Count the number of variants
+  theme_minimal() +
+  labs(
+    title = "Activity Class Distribution for All Groups",
+    x = "Activity Class",
+    y = "Count of Variants"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    legend.position = "none"  # Remove the legend
+  )
+
+# Save the plot
+ggsave(file = file.path(path, "Plots/20250324_clickseq_activity_class_bar_plot_syn_and_non_bounds_no_possibly_control_set.png"), plot = subset_bar_plot_all, device = "png", height =4, width = 8, bg = "white")
+ggsave(file = file.path(path, "Plots/20250324_clickseq_activity_class_bar_plot_syn_and_non_bounds_no_possibly_control_set.pdf"), plot = subset_bar_plot_all, device = "pdf", height =4, width = 8, bg = "white")
+
+# Bar plot by activity_class and group
+subset_bar_plot_group <- ggplot(CYP2D6_data_doubles_filtered_combined, aes(x = activity_class)) +
+  geom_bar(aes(y = ..count.., fill = activity_class), stat = "count") +  # Count the number of variants
+  facet_wrap(~ group) +  # Create separate plots for each group
+  theme_minimal() +
+  labs(
+    title = "Activity Class Distribution by Group",
+    x = "Activity Class",
+    y = "Count of Variants"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    legend.position = "none",  # Remove the legend
+    strip.background = element_rect(color = "black", fill = "white", size = 1),  # Add box around each facet
+    strip.text = element_text(size = 12),  # Ensure facet labels are visible
+    axis.text.x = element_text(angle = 45, hjust = 1)  # Rotate x-axis labels for better readability
+  )
+
+# Save the plot
+ggsave(file = file.path(path, "Plots/20250324_clickseq_activity_class_bar_plot_syn_and_non_bounds_no_possibly_control_set_by_group.png"), plot = subset_bar_plot_group, device = "png", height =4, width = 8, bg = "white")
+ggsave(file = file.path(path, "Plots/20250324_clickseq_activity_class_bar_plot_syn_and_non_bounds_no_possibly_control_set_by_group.pdf"), plot = subset_bar_plot_group, device = "pdf", height =4, width = 8, bg = "white")
+
+```
+
+### Plot the distributions of the estimated scores for the multiplicative score vs. the click-seq score
+### Load required packages for plots
+```{r Load_packages, message=FALSE, warning = FALSE}
+library(ggplot2)
+library(plyr)
+library(tidyr)
+library(reshape)
+library(scales)
+library(GGally)
+library(grid)
+library(gridExtra)
+library(zoo)
+library(cowplot)
+
+## The package versions used by the author as of 01/12/2023
+packageVersion("ggplot2")     #‘3.4.0’
+packageVersion("plyr")     #‘1.8.8’
+packageVersion("tidyr")     #‘1.2.1’
+packageVersion("reshape")     #‘0.8.9’
+packageVersion("scales")     #‘1.2.1’
+packageVersion("GGally")     #‘2.1.2’
+packageVersion("grid")     #‘4.2.2’
+packageVersion("gridExtra")     #2.3
+packageVersion("zoo")     #1.8.11
+packageVersion("cowplot")     #1.1.1
+
+```
+
+### Functions to plot score correlation matrix
+```{r score_correlation, warning=FALSE} 
+# Scatterplot function
+scatterplot_correlation_fxn <- function(data, mapping, ...) {
+
+  xvar <- rlang::as_label(mapping$x)
+  yvar <- rlang::as_label(mapping$y)
+
+  ggplot(data = data, aes_string(x = yvar, y = xvar)) +
+    geom_point(alpha = 0.6, ...) +
+    scale_x_continuous(
+      breaks = c(0, 0.5, 1.0),
+      labels = c("0.0", "0.5", "1.0")
+    ) +
+    scale_y_continuous(
+      breaks = c(0, 0.5, 1.0),
+      labels = c("0.0", "0.5", "1.0")
+    ) +
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_blank(),
+      axis.line = element_line(colour = "black")
+    )
+}
+
+histogram_fxn <- function(data, mapping, ...){
+  # Set the desired order of the class factor levels
+  data$class <- factor(data$class, levels = c("double", "missense", "frameshift", "nonsense", "synonymous"))
+  
+  p <- ggplot(data = data, mapping = mapping) + 
+    geom_histogram(aes(fill=class), binwidth=0.15, alpha = 0.5, size=0.2, position="stack", color="black") +
+    scale_fill_manual(values=c("frameshift" = "#FF7518", "missense"="grey", "nonsense"="red", "synonymous"="blue", "double"="#FFDB58")) + 
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_blank(), 
+          axis.line = element_line(colour = "black"))
+  p
+}
+```
+
+### Set up variables for the score correlation matrix 
+```{r Choose score correlation matrix variables}
+
+# Choose which replicates you want to compare
+a = "score"
+b = "multiplicative_score"
+
+```
+
+### Plot and save the score correlation matrix
+```{r}
+# Create the dataset with the desired scores_______________________________________________
+#cyp_variants_min <- CYP2D6_data_doubles_filtered[,c("class", a, b)]
+cyp_variants_min <- CYP2D6_data_doubles[,c("class", a, b)]
+
+# Designate the file name
+end <- "clickseq_vs_multiplicative_score_distributions"
+
+# Calculate the Pearson correlation between the scores
+cyp_pearson_cor_matrix <- as.matrix(cor(cyp_variants_min[,c(a,b)], use="pairwise.complete.obs", method = "pearson")) ###pairwise.complete.obs uses the non-NA values when calculating the correlation between score1 and score2  , Pearson : the linear relationship between two continuous variables
+
+# Calculate the Spearman correlation between the scores
+cyp_spearman_cor_matrix <- as.matrix(cor(cyp_variants_min[,c(a,b)], use="pairwise.complete.obs", method = "spearman")) ### Spearman : the monotonic relationship between two continuous or ordinal variables
+
+# Plot the correlation between the two distributions of activity scores
+library(GGally)
+library(ggplot2)
+
+cyp_scatterplot_matrix_pearson <-
+  ggpairs(
+    cyp_variants_min,
+    columns = c(a, b),
+    lower = list(continuous = scatterplot_correlation_fxn),
+    diag  = list(continuous = histogram_fxn),
+    columnLabels = c("Click-seq Activity Score", "Multiplicative Activity Score")
+  ) +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.text.x = element_text(face = "bold"),
+    strip.text.y = element_text(face = "bold")
+  )
+
+# Save the plots as .png and .pdf 
+ggsave(file = file.path(path, paste("Final_Plots/20251225_", end, ".png", sep = "")), plot = cyp_scatterplot_matrix_pearson, device = "png", height = 14, width = 14, units = "cm")
+ggsave(file = file.path(path, paste("Final_Plots/20251225_", end, ".pdf", sep = "")), plot = cyp_scatterplot_matrix_pearson, device = "pdf", height = 14, width = 14, units = "cm")
+
+```
+
+### Plot the spatial distribution of these double mutants for no possibly's 
+```{r notes}
+# Extract the number from variant_1 and store it in var_1_pos
+CYP2D6_data_doubles_filtered$var_1_pos <- as.numeric(sub("^[A-Za-z](\\d+)[A-Za-z]$", "\\1", CYP2D6_data_doubles_filtered$variant_1))
+
+# Extract the number from variant_2 and store it in var_2_pos
+CYP2D6_data_doubles_filtered$var_2_pos <- as.numeric(sub("^[A-Za-z](\\d+)[A-Za-z]$", "\\1", CYP2D6_data_doubles_filtered$variant_2))
+
+# Scatterplot of var_1_pos vs. var_2_pos
+spatial_dist <- ggplot(CYP2D6_data_doubles_filtered, aes(x = var_1_pos, y = var_2_pos)) +
+  geom_point(alpha = 0.6) +  # Scatter plot with semi-transparent points
+  theme_minimal() +  # Minimal theme for the plot
+  labs(
+    title = "Spatial Distribution of Double Mutants (Filtered: No Possibly's)",
+    x = "Position of Variant 1",
+    y = "Position of Variant 2"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10)
+  )
+
+# Save the plot
+ggsave(file = file.path(path, "Final_Plots/20251106_spatial_distribution_of_double_mutants_no_possibly.png"), plot = spatial_dist, device = "png", height =4, width = 8, bg = "white")
+ggsave(file = file.path(path, "Final_Plots/20251106_spatial_distribution_of_double_mutants_no_possibly.pdf"), plot = spatial_dist, device = "pdf", height =4, width = 8, bg = "white")
+
+```
+
+### Plot the spatial distribution of these double mutants including the possibly's (still bounded by synonymous and nonsense)
+```{r notes}
+# Extract the number from variant_1 and store it in var_1_pos
+CYP2D6_data_doubles$var_1_pos <- as.numeric(sub("^[A-Za-z](\\d+)[A-Za-z]$", "\\1", CYP2D6_data_doubles$variant_1))
+
+# Extract the number from variant_2 and store it in var_2_pos
+CYP2D6_data_doubles$var_2_pos <- as.numeric(sub("^[A-Za-z](\\d+)[A-Za-z]$", "\\1", CYP2D6_data_doubles$variant_2))
+
+# Scatterplot of var_1_pos vs. var_2_pos
+spatial_dist <- ggplot(CYP2D6_data_doubles, aes(x = var_1_pos, y = var_2_pos)) +
+  geom_point(alpha = 0.6) +
+  theme_minimal() +
+  labs(
+    title = "Spatial Distribution of Double Mutants",
+    x = "Position of Variant 1",
+    y = "Position of Variant 2"
+  ) +
+  theme(
+    plot.title = element_text(
+      hjust = 0.5,
+      size = 14,
+      face = "bold",
+      margin = margin(b = 12)  # space between title and panel
+    ),
+    axis.title.x = element_text(
+      size = 12,
+      face = "bold",
+      margin = margin(t = 10)  # space between x label and panel
+    ),
+    axis.title.y = element_text(
+      size = 12,
+      face = "bold",
+      margin = margin(r = 10)  # space between y label and panel
+    ),
+    axis.text  = element_text(size = 10),
+    # <- this draws the visible axes
+    axis.line  = element_line(color = "black", linewidth = 0.3),
+    # optional: lighten the grid so axes pop more
+    panel.grid.major = element_line(color = "grey85"),
+    panel.grid.minor = element_blank()
+  )
+
+print(spatial_dist)
+
+
+# Save the plot
+ggsave(file = file.path(path, "Final_Plots/20251106_spatial_distribution_of_double_mutants.png"), plot = spatial_dist, device = "png", height =4, width = 8, bg = "white")
+ggsave(file = file.path(path, "Final_Plots/20251106_spatial_distribution_of_double_mutants.pdf"), plot = spatial_dist, device = "pdf", height =4, width = 8, bg = "white")
+
+```
+
+### Plot the activity class distribution for synonymous and nonsense singles
+```{r activity class distribution}
+# Load in the path
+path = "/Users/gabrielleferra/Desktop/CYP-project/20250115/20250224_doubles_score_analysis"
+
+# Load in your data
+CYP2D6_data <- read.table(file = file.path(path, "Scores/Pacybara_CYP2D6_activity_scores_singles_fs_and_doubles_124_1e-5_5681e-5_3expts.csv"), sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+
+# Subset to synonymous and nonsense singles
+CYP2D6_data_syn <- subset(CYP2D6_data, CYP2D6_data$class == "synonymous")
+CYP2D6_data_non <- subset(CYP2D6_data, CYP2D6_data$class == "nonsense")
+
+# Set the order for activity_class
+CYP2D6_data_syn$activity_class <- factor(CYP2D6_data_syn$activity_class,levels = c("nonsense-like", "possibly_nonsense-like", "decreased", "possibly_decreased", "wt-like", "possibly_wt-like", "increased", "possibly_increased"))
+CYP2D6_data_non$activity_class <- factor(CYP2D6_data_non$activity_class,levels = c("nonsense-like", "possibly_nonsense-like", "decreased", "possibly_decreased", "wt-like", "possibly_wt-like", "increased", "possibly_increased"))
+
+# Bar plot for syn singles together
+subset_bar_plot_syn <- ggplot(CYP2D6_data_syn, aes(x = activity_class, fill = activity_class)) +
+  geom_bar(aes(y = ..count..), stat = "count") +  # Count the number of variants
+  theme_minimal() +
+  labs(
+    title = "Activity Class Distribution for Synonymous Singles",
+    x = "Activity Class",
+    y = "Count of Variants"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    legend.position = "none"  # Remove the legend
+  )
+
+# Save the plot
+ggsave(file = file.path(path, "Plots/20250408_clickseq_activity_class_bar_plot_syn.png"), plot = subset_bar_plot_syn, device = "png", height =4, width = 8, bg = "white")
+ggsave(file = file.path(path, "Plots/20250408_clickseq_activity_class_bar_plot_syn.pdf"), plot = subset_bar_plot_syn, device = "pdf", height =4, width = 8, bg = "white")
+
+# Bar plot for nonsense singles together
+subset_bar_plot_non <- ggplot(CYP2D6_data_non, aes(x = activity_class, fill = activity_class)) +
+  geom_bar(aes(y = ..count..), stat = "count") +  # Count the number of variants
+  theme_minimal() +
+  labs(
+    title = "Activity Class Distribution for Nonsense Singles",
+    x = "Activity Class",
+    y = "Count of Variants"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    legend.position = "none"  # Remove the legend
+  )
+
+# Save the plot
+ggsave(file = file.path(path, "Plots/20250408_clickseq_activity_class_bar_plot_non.png"), plot = subset_bar_plot_non, device = "png", height =4, width = 8, bg = "white")
+ggsave(file = file.path(path, "Plots/20250408_clickseq_activity_class_bar_plot_non.pdf"), plot = subset_bar_plot_non, device = "pdf", height =4, width = 8, bg = "white")
+
+```
+
+## Plot activity score ditributions with multiplicative and minimum score distributions plotted on top
+```{r activity class distribution}
+# Load combined activity score data
+CYP2D6_data <- CYP2D6_data_doubles # length is 1,671 - we have data for both singles and the double for this many doubles
+end = "doubles_12_5681e-5"
+i = 350
+#a = "no alleles" # Uncomment if you don't want to include the alleles of interest 
+                 # the single aa changes cannot be included once you have subsetted the data to just doubles
+                 # feel free to include double variants of interest
+
+#__________________________________________________________________________________________
+
+# base histogram
+library(dplyr)
+library(ggplot2)
+
+# Filter to the same data used in the histogram (exclude wt)
+dat_hist <- subset(CYP2D6_data, class != "wt")
+
+binwidth_val <- 0.05
+
+# how many variants go into each model curve
+n_score <- nrow(dat_hist)
+n_mult  <- sum(!is.na(dat_hist$multiplicative_score))
+n_min   <- sum(!is.na(dat_hist$min_score))
+
+hist_plot <- ggplot() +
+  # histogram
+  geom_histogram(
+    data = dat_hist,
+    aes(x = score, fill = class),
+    binwidth = binwidth_val,
+    alpha = 0.5,
+    size = 0.25,
+    position = "stack",
+    color = "black"
+  ) +
+
+  # multiplicative model line (solid black)
+  geom_density(
+    data = dat_hist,
+    aes(
+      x = multiplicative_score,
+      y = after_stat(..density.. * n_mult * binwidth_val),
+      linetype = "Multiplicative model",
+      color    = "Multiplicative model"
+    ),
+    linewidth = 0.8,
+    alpha = 0.4
+  ) +
+
+  # # minimum model line (dashed gray)
+  # geom_density(
+  #   data = dat_hist,
+  #   aes(
+  #     x = min_score,
+  #     y = after_stat(..density.. * n_min * binwidth_val),
+  #     linetype = "Minimum model",
+  #     color    = "Minimum model"
+  #   ),
+  #   linewidth = 0.8,
+  #   alpha = 0.4
+  # ) +
+
+  scale_fill_manual(
+    values = c(
+      "frameshift" = "#FF7518",
+      "missense"   = "grey",
+      "nonsense"   = "red",
+      "synonymous" = "blue",
+      "double"     = "#FFDB58"
+    ),
+    labels = c(
+      "missense"   = "Missense",
+      "frameshift" = "Frameshift",
+      "nonsense"   = "Nonsense",
+      "synonymous" = "Synonymous",
+      "double"     = "Double Mutants"
+    ),
+    guide = "none"
+  ) +
+
+  scale_color_manual(
+    values = c(
+      "Multiplicative model" = "black",
+      "Minimum model"        = "grey40"
+    ),
+    breaks = c("Multiplicative model", "Minimum model"),
+    name = "Model"
+  ) +
+
+  scale_linetype_manual(
+    values = c(
+      "Multiplicative model" = "solid",
+      "Minimum model"        = "dashed"
+    ),
+    breaks = c("Multiplicative model", "Minimum model"),
+    name = "Model"
+  ) +
+
+  theme_classic() +
+  ggtitle("Click-seq Activity Score Distribution vs Predictive Models for Double Variants") +
+  xlab("Activity Score") +
+  ylab("Count") +
+  coord_cartesian(ylim = c(0, 80)) +
+  theme(
+    axis.text.x   = element_text(color = "black", size = 12),
+    axis.text.y   = element_text(color = "black", size = 12),
+    axis.title.x  = element_text(size = 14, face = "bold"),
+    axis.title.y  = element_text(size = 14, face = "bold"),
+    plot.title    = element_text(size = 14, face = "bold", hjust = 0.5),
+    legend.position = "none"  ,   # ⬅ turn off legend completely
+    legend.title  = element_text(size = 14, face = "bold"),
+    legend.text   = element_text(size = 12)
+  )
+
+print(hist_plot)
+
+
+
+
+# Save the histogram plot
+ggsave(file = file.path(path, paste("Final_Plots/20251106_double_mutant_score_distribution_vs_mult.png", sep = "")), plot = hist_plot, device = "png", height =3.5, width = 5)
+
+ggsave(file = file.path(path, paste("Final_Plots/20251106_double_mutant_score_distribution_vs_mult.pdf", sep = "")), plot = hist_plot, device = "pdf", height =3.5, width = 5)
+
+```
