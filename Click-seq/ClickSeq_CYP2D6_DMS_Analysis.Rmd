@@ -1,0 +1,1095 @@
+---
+title: "ClickSeq_CYP2D6_DMS_Analysis"
+author: "Gabrielle Ferra, Nick Popp, Clara Amorosi, and Soyeon Showman"
+date: "2025-08-28"
+output: html_document
+---
+
+### Restart R before re-running this code, or else here() and file.path() get mixed up
+## 1 Setup (run every time)
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(readr.show_col_types = FALSE)
+rm(list = ls())
+graphics.off()
+markdown_directory <- getwd()
+```
+
+## 2 - Load libraries, CYP2D6 sequence, Pacybara barcode-variant map, codon table, and determine replicates
+## Run this every time
+```{r libraries_functions}
+# Make sure R is updated to at least 4.2.1
+
+## knitr for making files
+if (!require(knitr)) install.packages('knitr')
+library(knitr)
+
+## tidyverse for ggplot, dplyr, data manipulation
+if (!require(tidyverse)) install.packages('tidyverse')
+library(tidyverse)
+
+## scales 1.0.0 for scientific notation
+if (!require(scales)) install.packages('scales')
+library(scales)
+
+## dplyr
+if (!require(dplyr)) install.packages('dplyr')
+library(dplyr)
+
+## paletteer 1.2.0 for color palettes
+if (!require(paletteer)) install.packages('paletteer')
+library(paletteer)
+
+## here 1.2.0 for directory management
+if (!require(here)) install.packages('here')
+library(here)
+
+## hash for creating hash table
+if (!require(hash)) install.packages('hash')
+library(hash)
+
+###############################################################################
+
+## make sure working directories are correct
+i_am("ClickSeq_CYP2D6_DMS_Analysis.Rmd")
+
+###############################################################################
+
+## set seed for reproducible plots
+set.seed(627)
+
+## set up ggplot to look pretty
+ggplot <- function(...) {
+  ggplot2::ggplot(...) + 
+    ## white background with black border
+    theme(panel.background = element_rect(fill = "white", 
+                                          colour = "black"),
+          ## hide gridlines
+          panel.grid.major = element_line(color = "grey80"),
+          panel.grid.minor = element_blank(),
+          ## change legend position
+          legend.position = "right",
+          legend.justification = "center",
+          legend.key = element_rect(fill = "white", size = 0.7),
+          ## change text
+          axis.title = element_text(size = 15, color = "black"),
+          axis.text = element_text(size = 13, color = "black"),
+          legend.text = element_text(size = 13, color = "black"),
+          legend.title = element_text(size = 15, color = "black"))
+}
+
+###############################################################################
+
+## WT CYP2D6 sequence - nucleotide level
+wt_CYP2D6_nt <- "ATGGGTCTTGAAGCATTAGTCCCACTGGCAGTTATTGTTGCTATATTTTTACTATTGGTTGACTTGATGCATAGGAGACAAAGGTGGGCAGCTAGATACCCGCCAGGCCCGCTGCCCCTTCCTGGCTTGGGTAATCTACTTCATGTAGATTTTCAAAATACACCCTACTGCTTTGACCAACTTCGTCGTAGATTTGGGGACGTGTTTTCTTTACAATTGGCCTGGACACCCGTAGTTGTATTGAACGGACTAGCCGCTGTGCGTGAAGCATTGGTCACACATGGGGAAGACACAGCAGATAGGCCGCCAGTCCCTATCACGCAAATTCTTGGGTTTGGTCCAAGAAGTCAAGGCGTCTTTTTGGCTAGATATGGCCCAGCATGGAGAGAGCAAAGGAGGTTTAGTGTTTCTACCTTGCGTAATTTAGGTCTAGGTAAAAAGAGTTTGGAACAGTGGGTGACCGAAGAGGCAGCATGTTTGTGCGCAGCTTTTGCCAACCATTCTGGAAGACCATTTCGTCCAAACGGTTTATTAGACAAAGCAGTTTCAAATGTAATTGCCTCCTTGACCTGCGGAAGACGTTTCGAGTATGATGATCCTAGGTTTCTGAGACTTTTAGACTTGGCGCAAGAGGGTTTAAAAGAGGAGTCTGGATTCCTTAGAGAAGTTCTTAACGCTGTTCCTGTCTTGCTTCATATTCCCGCCTTAGCTGGTAAGGTGCTGAGATTCCAAAAGGCTTTTCTGACACAATTGGATGAATTGCTTACCGAGCATAGAATGACTTGGGATCCAGCTCAACCACCCAGGGATTTGACAGAAGCATTCCTGGCAGAAATGGAAAAGGCTAAGGGTAATCCGGAATCATCATTTAACGATGAAAACTTACGTATTGTGGTCGCCGATCTATTTTCTGCCGGAATGGTTACTACTTCCACAACATTAGCGTGGGGTCTACTATTGATGATACTACACCCGGATGTACAACGTCGTGTGCAGCAAGAGATTGATGACGTTATTGGTCAGGTTAGGAGACCTGAGATGGGGGATCAAGCCCACATGCCTTATACTACCGCGGTTATTCATGAAGTGCAAAGATTCGGTGACATCGTCCCTTTAGGAGTCACACATATGACAAGTAGGGATATTGAAGTGCAAGGTTTTAGAATTCCTAAAGGTACAACCTTAATAACTAATCTGTCTAGTGTCTTGAAAGATGAAGCTGTTTGGGAAAAACCATTTAGATTCCATCCTGAACATTTCTTGGATGCTCAAGGCCACTTCGTGAAGCCAGAAGCTTTTTTACCATTTTCTGCCGGTAGGAGAGCTTGTCTTGGTGAACCCTTAGCAAGAATGGAATTGTTTCTTTTCTTTACGAGCTTATTGCAGCACTTTTCCTTTTCTGTTCCAACCGGGCAGCCAAGGCCCTCACACCATGGCGTCTTTGCATTTCTAGTTAGCCCTAGCCCCTATGAATTATGTGCAGTACCAAGG"
+
+## import codon table
+codon_table <- read.csv("/Users/gabrielleferra/Desktop/CYP-project/CYP2D6_DMS_Analysis_Pipeline/final_analysis/SRC/files/codon_table.csv")
+
+## convert codon table to hash table
+hash_codon_table <- hash(keys = codon_table$codon,
+                         values = codon_table$aa)
+
+# import soft filter Pacybara barcode-variant map
+all_barcodes <- read.csv(here("Maps/Pacybara_map_clusters_transl_softfilter_MINQUAL67.csv"))
+
+# Define the replicates you are working with (replicates 1 and 2 here)
+reps = 12
+
+```
+
+## 3 - Get barcode to amino acid/nucleotide change maps and merge with barcode counts (loaded here)
+## Need to run this chunk when reps or all_barcodes is changed - but only once per change
+```{r call_mutations}
+
+# Create barcode to amino acid (aa) map
+bc_aa_map <- data.frame(
+  barcode = all_barcodes$virtualBarcode, ## for softfilter pacybara map
+  diff_aa = gsub("\\|", ", ", all_barcodes$aaChanges),
+  stringsAsFactors = FALSE
+)
+write.table(
+  bc_aa_map,
+  file = here("Final_Maps/Pacybara_CYP2D6_bc_aa_map_softfilter_MINQUAL67.txt"),
+  sep = "\t", row.names = FALSE
+)
+
+# Function to reformat the geno column in the Pacybara barcode-variant map
+reformat_geno <- function(geno_string, codon_change) {
+  if (geno_string == "=" || codon_change == "WT") return("WT")
+  
+  muts <- unlist(strsplit(geno_string, ";"))
+  muts <- sapply(muts, function(m) {
+    if (grepl("^([0-9]+)([A-Z])>([A-Z])$", m)) {
+      sub("^([0-9]+)([A-Z])>([A-Z])$", "\\2\\1\\3", m)
+    } else {
+      m
+    }
+  })
+  paste(muts, collapse = ", ")
+}
+
+# Create barcode to nucleotide (nt) map
+bc_nt_map <- data.frame(
+  barcode = all_barcodes$virtualBarcode, ## for softfilter pacybara map
+  diff_nt = mapply(reformat_geno, all_barcodes$geno, all_barcodes$codonChanges), ## for softfilter pacybara map
+  stringsAsFactors = FALSE
+)
+write.table(
+  bc_nt_map,
+  file = here("Final_Maps/Pacybara_CYP2D6_bc_nt_map_softfilter_MINQUAL67.txt"),
+  sep = "\t", row.names = FALSE
+)
+
+# Merge barcode counts with nt and aa variant maps 
+
+# Load barcode counts
+bcounts <- read.csv(file = here(sprintf("BarcodeCounts/all_barcode_counts_%s.csv", reps)), header = TRUE)
+colnames(bcounts) <- c("barcode", "count", "bin")
+
+# Merge barcode counts with nucleotide (nt) map - this does depend on the replicate
+all_bc_counts_w_ntvarname <- merge(
+  x = bcounts,
+  y = bc_nt_map,
+  by = "barcode",
+  all.x = TRUE
+)
+write.table(
+  all_bc_counts_w_ntvarname,
+  file = here(sprintf("Final_Maps/Pacybara_CYP2D6_all_bc_counts_w_ntvarname_%s_softfilter_MINQUAL67.txt", reps)),
+  sep = "\t", 
+  row.names = FALSE
+)
+
+# Merge barcode counts with amino acid (aa) map - this does depend on the replicate
+all_bc_counts_w_aavarname <- merge(
+  x = bcounts,
+  y = bc_aa_map,
+  by = "barcode",
+  all.x = TRUE
+)
+write.table(
+  all_bc_counts_w_aavarname,
+  file = here(sprintf("Final_Maps/Pacybara_CYP2D6_all_bc_counts_w_aavarname_%s_softfilter_MINQUAL67.txt", reps)),  # Dynamically create the filename
+  sep = "\t", 
+  row.names = FALSE
+)
+
+```
+
+## 4 - get variant type summaries
+## Only need to run this once per barcode-variant map (all_barcodes); the files created here will be uploaded later in the code
+```{r variant_type_summary}
+
+# Load in bc_aa_map and bc_nt_map
+bc_aa_map <- read.table(
+  file = here("Final_Maps/Pacybara_CYP2D6_bc_aa_map_softfilter_MINQUAL67.txt"),
+  sep = "\t",
+  header = TRUE,
+  stringsAsFactors = FALSE
+)
+
+bc_nt_map <- read.table(
+  file = here("Final_Maps/Pacybara_CYP2D6_bc_nt_map_softfilter_MINQUAL67.txt"),
+  sep = "\t",
+  header = TRUE,
+  stringsAsFactors = FALSE
+)
+
+## Save detailed barcode and variant mapping
+barcode <- bc_aa_map$barcode
+diff_aa <- bc_aa_map$diff_aa
+diff_nt <- bc_nt_map$diff_nt
+
+mut_count <- ifelse(
+  bc_aa_map$diff_aa %in% c("WT", "="),
+  0,
+  sapply(strsplit(bc_aa_map$diff_aa, ","), length)
+)
+
+wt_aa <- ifelse(
+  bc_aa_map$diff_aa %in% c("WT", "="),
+  "WT",
+  ifelse(
+    mut_count > 1,
+    "XXX",
+    substr(bc_aa_map$diff_aa, 1, 1)
+  )
+)
+
+tail_after_pos <- sub("^[A-Z]+[0-9]+", "", bc_aa_map$diff_aa)
+
+mut_aa <- ifelse(
+  bc_aa_map$diff_aa %in% c("WT", "="),
+  "WT",
+  ifelse(
+    mut_count > 1,
+    "YYY",
+    ifelse(
+      grepl("fs$", bc_aa_map$diff_aa),
+      "fs",
+      ifelse(
+        nchar(tail_after_pos) > 1,
+        tail_after_pos,  # insertion or complex tail
+        substr(bc_aa_map$diff_aa,
+               nchar(bc_aa_map$diff_aa),
+               nchar(bc_aa_map$diff_aa))
+      )
+    )
+  )
+)
+
+position <- ifelse(
+  bc_aa_map$diff_aa %in% c("WT", "="),
+  0,
+  ifelse(
+    mut_count > 1,
+    0,
+    as.numeric(sub("^[A-Z]+([0-9]+).*", "\\1", bc_aa_map$diff_aa))
+  )
+)
+
+mut_type <- ifelse(
+  bc_aa_map$diff_aa %in% c("WT", "="),  # WT case
+  "0 - WT",
+  ifelse(
+    mut_aa == "fs",                     # frameshift
+    "frameshift",
+    ifelse(
+      mut_count > 1,                    # multiple mutations
+      ifelse(mut_count > 5, "6+", as.character(mut_count)),
+      ifelse(
+        nchar(mut_aa) > 1,              # insertion (like IIILETSA)
+        "insertion",
+        ifelse(
+          wt_aa == mut_aa,              # synonymous
+          "1 - synonymous",
+          ifelse(
+            mut_aa == "*",              # nonsense/stop
+            "1 - nonsense",
+            "1 - missense"              # default single-AA change
+          )
+        )
+      )
+    )
+  )
+)
+
+# assemble the final dataframe
+all_bc_var_info <- data.frame(
+  barcode   = bc_aa_map$barcode,
+  diff_aa   = bc_aa_map$diff_aa,
+  diff_nt   = bc_nt_map$diff_nt[ match(bc_aa_map$barcode, bc_nt_map$barcode) ],
+  mut_count = mut_count,
+  wt_aa     = wt_aa,
+  mut_aa    = mut_aa,
+  position  = position,
+  mut_type  = mut_type,
+  stringsAsFactors = FALSE
+)
+
+# Enforce numeric types
+all_bc_var_info$mut_count <- as.integer(all_bc_var_info$mut_count)
+all_bc_var_info$position  <- as.integer(all_bc_var_info$position)
+
+# Make mut_type an ordered factor (useful for plotting)
+all_bc_var_info$mut_type <- factor(
+  all_bc_var_info$mut_type,
+  levels = c(
+    "0 - WT",
+    "1 - synonymous",
+    "1 - missense",
+    "1 - nonsense",
+    "frameshift",
+    "insertion",
+    "2", "3", "4", "5", "6+"
+  ),
+  ordered = TRUE
+)
+
+# Subset single-mutant barcodes and WT barcodes
+single_bc_var_info <- subset(all_bc_var_info, mut_count == 1)
+wt_bc_var_info <- subset(all_bc_var_info, wt_aa == "WT")
+
+# Combine single mutations and WT into one table
+single_bc_var_info <- rbind(single_bc_var_info, wt_bc_var_info)
+
+# Clean up mutation type labels
+single_bc_var_info$mut_type <- gsub(". - ", "", single_bc_var_info$mut_type)
+
+## Write the tables to output files
+# Save the full barcode-to-variant mapping
+write.table(
+  all_bc_var_info,
+  file = here("Final_Maps/Pacybara_CYP2D6_all_var_info_map_softfilter_MINQUAL67.txt"),  # Use `here()` for relative paths
+  sep = "\t",
+  row.names = FALSE
+)
+
+# Add a column to single_var called aaChanges
+single_bc_var_info$aaChanges <- single_bc_var_info$diff_aa
+
+# Save the single and WT barcode mapping
+write.table(
+  single_bc_var_info,
+  file = here("Final_Maps/Pacybara_CYP2D6_single_var_FS_info_map_softfilter_MINQUAL67.txt"), # Use `here()` for relative paths
+  sep = "\t",
+  row.names = FALSE
+)
+
+```
+
+## 5 - Load mutations and make the mutation type plot
+## Only need to run this once per barcode-variant map
+```{r load_mutations_and_make_mut_type_plot}
+# Load libraries
+library(scales)
+library(ggplot2)
+library(dplyr)
+library(forcats)
+
+# Load in the variant info map made in chunk 4
+all_info <- read.table(here("Final_Maps/Pacybara_CYP2D6_all_var_info_map_softfilter_MINQUAL67.txt"), header = TRUE)
+
+# Plot the mutation type distribution
+mutation_type_plot <- all_info %>%
+  mutate(mut_type = factor(mut_type)) %>%
+  group_by(mut_type) %>%
+  count() %>%
+  ungroup() %>%
+  complete(mut_type, fill = list(n = 0)) %>%
+  mutate(n2 = n + 1) %>%
+  ggplot(aes(x = n2, y = fct_rev(mut_type))) + 
+  geom_bar(stat = "identity", fill = "#A5C8E8", alpha = 0.9, show.legend = FALSE, color = NA) +
+  geom_text(aes(label = comma(n, accuracy = 1)), hjust = 0, nudge_x = 0.1, size = 4) +
+  scale_x_log10(
+    expand = c(0, 0),
+    limits = c(1e0, 4e6),
+    breaks = trans_breaks("log10", function(x) 10^x, n = 6),
+    labels = trans_format("log10", math_format(10^.x))
+  ) +
+  labs(
+    title = bquote(bold(bolditalic("CYP2D6") ~ " Library Mutation Type Distribution")),
+    x = "Number of Mapped Barcodes",
+    y = "Number and Type of Variants"
+  ) +
+  theme_classic() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    axis.title.x = element_text(face = "bold", size = 13),
+    axis.title.y = element_text(face = "bold", size = 13),
+    axis.text.x  = element_text(size = 11, color = "black"),
+    axis.text.y  = element_text(size = 11, color = "black"),
+    strip.text = element_text(size = 13)
+  )
+
+# Save the plot
+ggsave(here("Final_Plots/Pacybara_mutation_type_plot_softfilter_MINQUAL67.png"), plot = mutation_type_plot, width = 8, height = 6, dpi = 300)
+ggsave(here("Final_Plots/Pacybara_mutation_type_plot_softfilter_MINQUAL67.pdf"), plot = mutation_type_plot, width = 8, height = 6, dpi = 300)
+
+```
+
+## 6 - Get the variant info map for double variants
+## Also only need to run this once per barcode-variant map
+```{r get_doubles}
+# Load in the variant info map
+all_info <- read.table(here("Final_Maps/Pacybara_CYP2D6_all_var_info_map_softfilter_MINQUAL67.txt"), header = TRUE)
+
+# Get double variants
+double_var <- subset(all_info, subset = (mut_count == 2))
+
+# how many are there?
+length(double_var$barcode)
+
+# Add a column to single_var called aaChanges
+double_var$aaChanges <- double_var$diff_aa
+
+# Save double_vars
+write.table(double_var, file = here("Final_Maps/Pacybara_CYP2D6_double_var_info_map_softfilter_MINQUAL67.txt"), sep = "\t", row.names = F)
+
+```
+
+## 7 - Get the frameshift var map and the singles + frameshift var map
+## Also only need to run this once per barcode-variant map
+```{r get_fs_mutations}
+
+# Load in the variant info map for all and single variants
+all_info <- read.table(here("Final_Maps/Pacybara_CYP2D6_all_var_info_map_softfilter_MINQUAL67.txt"), header = TRUE)
+single_var <- read.table(here("Final_Maps/Pacybara_CYP2D6_single_var_FS_info_map_softfilter_MINQUAL67.txt"), header = TRUE)
+
+# subset out all the frameshift variants
+frameshift <- subset(all_info, all_info$mut_type == "frameshift")
+
+# Add aaChanges column (diff_aa)
+frameshift$aaChanges <- frameshift$diff_aa
+
+# Save fs_var_bc_counts
+write.table(frameshift, file = here("Final_Maps/Pacybara_CYP2D6_FS_var_info_map_softfilter_MINQUAL67.txt"), sep = "\t", row.names = F)
+
+```
+
+## 8 Make .m1 file for single variants
+```{r make_m1}
+# Make the intermediate m1 file
+
+# Load in the variant info map for all and just single variants + frameshift
+all_info <- read.table(here("Final_Maps/Pacybara_CYP2D6_all_var_info_map_softfilter_MINQUAL67.txt"), header = TRUE)
+single_var <- read.table(here("Final_Maps/Pacybara_CYP2D6_single_var_FS_info_map_softfilter_MINQUAL67.txt"), header = TRUE)
+
+# Load in all_bc_counts_w_aavarname and all_bc_counts_w_ntvarname - these are the bin counts for the click-seq replicates
+bc_counts_aa <- read.table(here(sprintf("Final_Maps/Pacybara_CYP2D6_all_bc_counts_w_aavarname_%s_softfilter_MINQUAL67.txt", reps)), header = TRUE)
+bc_counts_nt <- read.table(here(sprintf("Final_Maps/Pacybara_CYP2D6_all_bc_counts_w_ntvarname_%s_softfilter_MINQUAL67.txt", reps)), header = TRUE)
+
+# omit NAs
+bc_counts_aa <- na.omit(bc_counts_aa)
+bc_counts_nt <- na.omit(bc_counts_nt)
+
+# merge bin counts with the singles from the pacybara map
+bc_counts_aa <- merge(x = bc_counts_aa, y = single_var, by = "barcode", all.x = TRUE)
+bc_counts_nt <- merge(x = bc_counts_nt, y = single_var, by = "barcode", all.x = TRUE)
+
+# Reps 1 and 2
+# If you have more than 2 replicates you would make changes to the code here to accomodate for that
+if (reps == 12){
+  m1 <- data.frame(matrix(ncol = 21, nrow = length(unique(single_var$aaChanges))))
+  col <- c("variant","Sort1_P6","Sort1_P5","Sort1_P4","Sort1_P3",
+              "Sort2_P6","Sort2_P5","Sort2_P4","Sort2_P3","Sort1_P6_freq",
+              "Sort1_P5_freq","Sort1_P4_freq","Sort1_P3_freq","Sort2_P6_freq",
+              "Sort2_P5_freq","Sort2_P4_freq","Sort2_P3_freq","variant_SeqID_NT",
+              "variant_SeqID_AA","pos", "mut")
+  colnames(m1) <- col
+
+  # Create variant name column
+  m1$variant <- unique(single_var$aaChanges)
+  
+  # Fill in m1 file
+  for (i in 1:length(m1$variant)){
+    #print(i)
+    x <- single_var[single_var$aaChanges == m1$variant[i],]
+    m1$position[i] <- x$position[1]
+    m1$mut_aa[i] <- x$mut_aa[1]
+    m1$diff_aa[i] <- x$diff_aa[1]
+    m1$diff_nt[i] <- x$diff_nt[1]
+    m1$wt_aa[i] <- x$wt_aa[1]
+    m1$mut_type[i] <- x$mut_type[1]
+    m1$aaChanges[i] <- x$aaChanges[1]
+    counts <- subset(bc_counts_nt, aaChanges == m1$variant[i])
+
+    Sort1_P6 <- subset(counts, subset = (bin == "Sort1P6A" | bin == "Sort1P6B"))
+    m1$Sort1_P6[i] <- sum(Sort1_P6$count)
+
+    Sort1_P5 <- subset(counts, subset = (bin == "Sort1P5A" | bin == "Sort1P5B"))
+    m1$Sort1_P5[i] <- sum(Sort1_P5$count)
+
+    Sort1_P4 <- subset(counts, subset = (bin == "Sort1P4A" | bin == "Sort1P4B"))
+    m1$Sort1_P4[i] <- sum(Sort1_P4$count)
+
+    Sort1_P3 <- subset(counts, subset = (bin == "Sort1P3A" | bin == "Sort1P3B"))
+    m1$Sort1_P3[i] <- sum(Sort1_P3$count)
+
+    Sort2_P6 <- subset(counts, subset = (bin == "Sort2P6A" | bin == "Sort2P6B"))
+    m1$Sort2_P6[i] <- sum(Sort2_P6$count)
+
+    Sort2_P5 <- subset(counts, subset = (bin == "Sort2P5A" | bin == "Sort2P5B"))
+    m1$Sort2_P5[i] <- sum(Sort2_P5$count)
+
+    Sort2_P4 <- subset(counts, subset = (bin == "Sort2P4A" | bin == "Sort2P4B"))
+    m1$Sort2_P4[i] <- sum(Sort2_P4$count)
+
+    Sort2_P3 <- subset(counts, subset = (bin == "Sort2P3A" | bin == "Sort2P3B"))
+    m1$Sort2_P3[i] <- sum(Sort2_P3$count)
+  }
+  
+  # Calculate bin sums
+
+  # For reps 1 and 2
+  Sort1P6_sum <- sum(m1$Sort1_P6)
+  Sort1P5_sum <- sum(m1$Sort1_P5)
+  Sort1P4_sum <- sum(m1$Sort1_P4)
+  Sort1P3_sum <- sum(m1$Sort1_P3)
+  Sort2P6_sum <- sum(m1$Sort2_P6)
+  Sort2P5_sum <- sum(m1$Sort2_P5)
+  Sort2P4_sum <- sum(m1$Sort2_P4)
+  Sort2P3_sum <- sum(m1$Sort2_P3)
+
+  n_list <- c()
+  p_list <- c()
+  
+  # Calculate bin frequencies for each variant and add variant ID
+  for (i in 1:length(m1$variant)){
+  
+    # For reps 1 and 2
+    m1$Sort1_P6_freq[i] <- m1$Sort1_P6[i]/Sort1P6_sum
+    m1$Sort1_P5_freq[i] <- m1$Sort1_P5[i]/Sort1P5_sum
+    m1$Sort1_P4_freq[i] <- m1$Sort1_P4[i]/Sort1P4_sum
+    m1$Sort1_P3_freq[i] <- m1$Sort1_P3[i]/Sort1P3_sum
+    m1$Sort2_P6_freq[i] <- m1$Sort2_P6[i]/Sort2P6_sum
+    m1$Sort2_P5_freq[i] <- m1$Sort2_P5[i]/Sort2P5_sum
+    m1$Sort2_P4_freq[i] <- m1$Sort2_P4[i]/Sort2P4_sum
+    m1$Sort2_P3_freq[i] <- m1$Sort2_P3[i]/Sort2P3_sum
+    
+    n_list <- c()
+    p_list <- c()
+    if (m1$variant[i] == "WT"){
+      wt <- m1[i,]
+      m1 <- m1[-i,]
+      m1 <- rbind(wt, m1)
+      m1$variant[1] <- "_wt"
+      m1$variant_SeqID_NT[1] <- "999-WTNT"
+      m1$variant_SeqID_AA[1] <- "999-WTAA"
+      m1$pos[1] <- 999
+      m1$mut[1] <- "WTAA"
+  }
+    else{
+      m1$variant_SeqID_AA[i] <- paste(as.character(m1$pos[i]),"-",m1$mut[i], sep = "")
+      split <- strsplit(m1$variant[i], ", ")
+      split <- split[[1]]
+      for (j in 1:length(split)){
+        substr(split[j], 2, -1)
+        mut <- strsplit(split[j], "")
+        mut <- mut[[1]]
+        p <- substr(split[j], 2, (length(mut)-1))
+        n <- substr(split[j],length(mut),length(mut))
+      
+        n_list <- c(n_list, n)
+        p_list <- c(p_list, p)
+      }
+      part1 <- paste(p_list, collapse=",")
+      part2 <- paste(n_list, collapse = ",")
+      m1$variant_SeqID_NT[i] <- paste(part1,"-", part2,sep = "")
+    }
+  
+  }
+  
+  # Calculate total Sort 1 (replicate 1) and Sort 2 (replicate 2) counts and the frequency of each variant in each replicate (Sortn_ratio)
+  
+  # Sum the counts for Sort1 (P6, P5, P4, P3)
+  Sort1_total_sum <- sum(m1$Sort1_P6, m1$Sort1_P5, m1$Sort1_P4, m1$Sort1_P3, na.rm = TRUE)
+
+  # Sum the counts for Sort2 (P6, P5, P4, P3)
+  Sort2_total_sum <- sum(m1$Sort2_P6, m1$Sort2_P5, m1$Sort2_P4, m1$Sort2_P3, na.rm = TRUE)
+  
+  # Sum the counts across the Sort columns for each row
+  m1$Sort1_total_counts <- rowSums(m1[, c("Sort1_P6", "Sort1_P5", "Sort1_P4", "Sort1_P3")], na.rm = TRUE)
+  m1$Sort2_total_counts <- rowSums(m1[, c("Sort2_P6", "Sort2_P5", "Sort2_P4", "Sort2_P3")], na.rm = TRUE)
+  
+  # Add the frequency of each barcode in the replicate
+  m1$Sort1_ratio <- m1$Sort1_total_counts / Sort1_total_sum
+  m1$Sort2_ratio <- m1$Sort2_total_counts / Sort2_total_sum
+  
+}
+
+# Save .m1 file
+write.table(m1, file = here(sprintf("Final_Maps/Pacybara_CYP2D6_samples_singles_and_fs_%s_softfilter_MINQUAL67.m1", reps)), sep = "\t", row.names = F)
+
+```
+
+## 9 Get the m1 file for double variants
+```{r make_m1_reps}
+# Make the intermediate m1 file
+
+# Load in the variant info map for all and just single variants
+all_info <- read.table(here("Final_Maps/Pacybara_CYP2D6_all_var_info_map_softfilter_MINQUAL67.txt"), header = TRUE)
+double_var <- read.table(here("Final_Maps/Pacybara_CYP2D6_double_var_info_map_softfilter_MINQUAL67.txt"), header = TRUE)
+
+# Load in all_bc_counts_w_aavarname and all_bc_counts_w_ntvarname - these are the bin counts for the click-seq replicates
+bc_counts_aa <- read.table(here(sprintf("Final_Maps/Pacybara_CYP2D6_all_bc_counts_w_aavarname_%s_softfilter_MINQUAL67.txt", reps)), header = TRUE)
+bc_counts_nt <- read.table(here(sprintf("Final_Maps/Pacybara_CYP2D6_all_bc_counts_w_ntvarname_%s_softfilter_MINQUAL67.txt", reps)), header = TRUE)
+
+# omit NAs
+bc_counts_aa <- na.omit(bc_counts_aa)
+bc_counts_nt <- na.omit(bc_counts_nt)
+
+# merge bin counts with the singles from the pacybara map
+bc_counts_aa <- merge(x = bc_counts_aa, y = double_var, by = "barcode", all.x = TRUE)
+bc_counts_nt <- merge(x = bc_counts_nt, y = double_var, by = "barcode", all.x = TRUE)
+
+# Reps 1 and 2
+# If you have more than 2 replicates, this is where you would change the code to accomodate for that
+if (reps == 12){
+  m1 <- data.frame(matrix(ncol = 21, nrow = length(unique(double_var$aaChanges))))
+  col <- c("variant","Sort1_P6","Sort1_P5","Sort1_P4","Sort1_P3",
+              "Sort2_P6","Sort2_P5","Sort2_P4","Sort2_P3","Sort1_P6_freq",
+              "Sort1_P5_freq","Sort1_P4_freq","Sort1_P3_freq","Sort2_P6_freq",
+              "Sort2_P5_freq","Sort2_P4_freq","Sort2_P3_freq","variant_SeqID_NT",
+              "variant_SeqID_AA","pos", "mut")
+  colnames(m1) <- col
+
+  # Create variant name column
+  m1$variant <- unique(double_var$aaChanges)
+  
+  # Fill in m1 file
+  for (i in 1:length(m1$variant)){
+    #print(i)
+    x <- double_var[double_var$aaChanges == m1$variant[i],]
+    m1$position[i] <- x$position[1]
+    m1$mut_aa[i] <- x$mut_aa[1]
+    m1$diff_aa[i] <- x$diff_aa[1]
+    m1$diff_nt[i] <- x$diff_nt[1]
+    m1$wt_aa[i] <- x$wt_aa[1]
+    m1$mut_type[i] <- x$mut_type[1]
+    m1$aaChanges[i] <- x$aaChanges[1]
+    counts <- subset(bc_counts_nt, aaChanges == m1$variant[i])
+
+    Sort1_P6 <- subset(counts, subset = (bin == "Sort1P6A" | bin == "Sort1P6B"))
+    m1$Sort1_P6[i] <- sum(Sort1_P6$count)
+
+    Sort1_P5 <- subset(counts, subset = (bin == "Sort1P5A" | bin == "Sort1P5B"))
+    m1$Sort1_P5[i] <- sum(Sort1_P5$count)
+
+    Sort1_P4 <- subset(counts, subset = (bin == "Sort1P4A" | bin == "Sort1P4B"))
+    m1$Sort1_P4[i] <- sum(Sort1_P4$count)
+
+    Sort1_P3 <- subset(counts, subset = (bin == "Sort1P3A" | bin == "Sort1P3B"))
+    m1$Sort1_P3[i] <- sum(Sort1_P3$count)
+
+    Sort2_P6 <- subset(counts, subset = (bin == "Sort2P6A" | bin == "Sort2P6B"))
+    m1$Sort2_P6[i] <- sum(Sort2_P6$count)
+
+    Sort2_P5 <- subset(counts, subset = (bin == "Sort2P5A" | bin == "Sort2P5B"))
+    m1$Sort2_P5[i] <- sum(Sort2_P5$count)
+
+    Sort2_P4 <- subset(counts, subset = (bin == "Sort2P4A" | bin == "Sort2P4B"))
+    m1$Sort2_P4[i] <- sum(Sort2_P4$count)
+
+    Sort2_P3 <- subset(counts, subset = (bin == "Sort2P3A" | bin == "Sort2P3B"))
+    m1$Sort2_P3[i] <- sum(Sort2_P3$count)
+  }
+  
+  # Calculate bin sums
+
+  # For reps 1 and 2
+  Sort1P6_sum <- sum(m1$Sort1_P6)
+  Sort1P5_sum <- sum(m1$Sort1_P5)
+  Sort1P4_sum <- sum(m1$Sort1_P4)
+  Sort1P3_sum <- sum(m1$Sort1_P3)
+  Sort2P6_sum <- sum(m1$Sort2_P6)
+  Sort2P5_sum <- sum(m1$Sort2_P5)
+  Sort2P4_sum <- sum(m1$Sort2_P4)
+  Sort2P3_sum <- sum(m1$Sort2_P3)
+
+
+  n_list <- c()
+  p_list <- c()
+  # Calculate frequencies
+  for (i in 1:length(m1$variant)){
+  
+    # For reps 1 and 2
+    m1$Sort1_P6_freq[i] <- m1$Sort1_P6[i]/Sort1P6_sum
+    m1$Sort1_P5_freq[i] <- m1$Sort1_P5[i]/Sort1P5_sum
+    m1$Sort1_P4_freq[i] <- m1$Sort1_P4[i]/Sort1P4_sum
+    m1$Sort1_P3_freq[i] <- m1$Sort1_P3[i]/Sort1P3_sum
+    m1$Sort2_P6_freq[i] <- m1$Sort2_P6[i]/Sort2P6_sum
+    m1$Sort2_P5_freq[i] <- m1$Sort2_P5[i]/Sort2P5_sum
+    m1$Sort2_P4_freq[i] <- m1$Sort2_P4[i]/Sort2P4_sum
+    m1$Sort2_P3_freq[i] <- m1$Sort2_P3[i]/Sort2P3_sum
+    
+    n_list <- c()
+    p_list <- c()
+    if (m1$variant[i] == "WT"){
+      wt <- m1[i,]
+      m1 <- m1[-i,]
+      m1 <- rbind(wt, m1)
+      m1$variant[1] <- "_wt"
+      m1$variant_SeqID_NT[1] <- "999-WTNT"
+      m1$variant_SeqID_AA[1] <- "999-WTAA"
+      m1$pos[1] <- 999
+      m1$mut[1] <- "WTAA"
+  }
+    else{
+      m1$variant_SeqID_AA[i] <- paste(as.character(m1$pos[i]),"-",m1$mut[i], sep = "")
+      split <- strsplit(m1$variant[i], ", ")
+      split <- split[[1]]
+      for (j in 1:length(split)){
+        substr(split[j], 2, -1)
+        mut <- strsplit(split[j], "")
+        mut <- mut[[1]]
+        p <- substr(split[j], 2, (length(mut)-1))
+        n <- substr(split[j],length(mut),length(mut))
+      
+        n_list <- c(n_list, n)
+        p_list <- c(p_list, p)
+      }
+      part1 <- paste(p_list, collapse=",")
+      part2 <- paste(n_list, collapse = ",")
+      m1$variant_SeqID_NT[i] <- paste(part1,"-", part2,sep = "")
+    }
+  
+  }
+  
+  # Calculate total Sort 1 and Sort 2 counts and the frequency of each variant in each replicate (Sortn_ratio)
+  
+  # Sum the counts for Sort1 (P6, P5, P4, P3)
+  Sort1_total_sum <- sum(m1$Sort1_P6, m1$Sort1_P5, m1$Sort1_P4, m1$Sort1_P3, na.rm = TRUE)
+
+  # Sum the counts for Sort2 (P6, P5, P4, P3)
+  Sort2_total_sum <- sum(m1$Sort2_P6, m1$Sort2_P5, m1$Sort2_P4, m1$Sort2_P3, na.rm = TRUE)
+  
+  # Sum the counts across the Sort columns for each row
+  m1$Sort1_total_counts <- rowSums(m1[, c("Sort1_P6", "Sort1_P5", "Sort1_P4", "Sort1_P3")], na.rm = TRUE)
+  m1$Sort2_total_counts <- rowSums(m1[, c("Sort2_P6", "Sort2_P5", "Sort2_P4", "Sort2_P3")], na.rm = TRUE)
+  
+  # Add the frequency of each barcode in the replicate
+  m1$Sort1_ratio <- m1$Sort1_total_counts / Sort1_total_sum
+  m1$Sort2_ratio <- m1$Sort2_total_counts / Sort2_total_sum
+  
+}
+
+# Save .m1 file
+write.table(m1, file = here(sprintf("Final_Maps/Pacybara_CYP2D6_samples_doubles_%s_softfilter_MINQUAL67.m1", reps)), sep = "\t", row.names = F)
+
+#combine with m1 for singles and fs
+single_var_fs <- read.table(file = here(sprintf("Final_Maps/Pacybara_CYP2D6_samples_singles_and_fs_%s_softfilter_MINQUAL67.m1", reps)), sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+
+single_fs_double <- rbind(m1, single_var_fs)
+
+# Save full .m1 file
+write.table(single_fs_double, file = here(sprintf("Final_Maps/Pacybara_CYP2D6_samples_singles_fs_and_doubles_%s_softfilter_MINQUAL67.m1", reps)), sep = "\t", row.names = F)
+
+```
+
+### Clear workspace before continuing
+### 10: Load required packages to calculate activity scores; define your working directory
+```{r Load packages, warning = FALSE}
+
+# Load libraries
+library(plyr) # used to be plyr but this was erasing here()
+library(tidyr)
+library(reshape)
+
+## The package versions used by the author
+packageVersion("plyr")     #‘1.8.4’
+packageVersion("tidyr")     #‘0.8.2’
+packageVersion("reshape")    #‘0.8.8’
+
+# make path variable because plyr causes problems with here() 
+# using file.path function with the variable below from now on in the code
+path = "/Users/gabrielleferra/Desktop/CYP-project/20250828_clickseq_dataset_MINQUAL67_final_datasets_and_analysis"
+
+```
+
+### 11: Set universal filters 
+```{r Set the filters for CYP2D6 data}
+#### Within the experiment, a variant had to be present a sum of this frequency across the four bins to be included in the analysis
+frequency_filter <- 1e-05
+#### Across the experiments, a variant had to be observed (passing the frequency filter) at least this number of experiments to be included in the analysis
+experiment_filter <- 2
+```
+
+## 12 Calculate activity scores
+## If you have more than 2 replicates, you would add code to accomodate that here
+```{r calculating scores}
+# Calculating activity scores
+
+# Load .m1 file
+CYP2D6_raw <- read.table(file = file.path(path, "Final_Maps/Pacybara_CYP2D6_samples_singles_and_fs_12_softfilter_MINQUAL67.m1"), sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+
+# Get just the frequency and variant columns for replicates 1 and 2
+CYP2D6_raw <- CYP2D6_raw[, c("variant", "mut_type", "Sort1_P6_freq", "Sort1_P5_freq", "Sort1_P4_freq", "Sort1_P3_freq", "Sort2_P6_freq", "Sort2_P5_freq", "Sort2_P4_freq", "Sort2_P3_freq", "Sort1_ratio", "Sort2_ratio")]
+
+# Add up the frequencies, will need this to calculate the scores:
+CYP2D6_raw$exp1_total_freq <- rowSums(CYP2D6_raw[,c("Sort1_P6_freq", "Sort1_P5_freq", "Sort1_P4_freq", "Sort1_P3_freq")], na.rm = TRUE)
+CYP2D6_raw$exp2_total_freq <- rowSums(CYP2D6_raw[,c("Sort2_P6_freq", "Sort2_P5_freq", "Sort2_P4_freq", "Sort2_P3_freq")], na.rm = TRUE)
+
+# Number of variants pre filtering for those in the click-seq data set
+length(CYP2D6_raw$variant) 
+
+# Get rid of all of the variants that aren't in any single one of the replicates
+row_sums <- rowSums(CYP2D6_raw[, 12:13])
+CYP2D6_raw <- CYP2D6_raw[row_sums != 0, ]
+
+# Reset the row numbers
+rownames(CYP2D6_raw) <- NULL
+
+# Number of variants present in the click-seq data set
+length(CYP2D6_raw$variant) 
+
+# Create the respective score columns
+CYP2D6_raw$exp1_w_ave <- NA
+CYP2D6_raw$exp2_w_ave <- NA
+
+# Implement frequency filter, calculate weighted average (optimized weights)
+weight1 = 0.05
+weight2 = 0.2
+weight3 = 0.25
+CYP2D6_raw[is.na(CYP2D6_raw)] <- 0
+
+for(x in 1:nrow(CYP2D6_raw)){
+
+  if(CYP2D6_raw$Sort1_ratio[x] >= frequency_filter){CYP2D6_raw$exp1_w_ave[x] <- (CYP2D6_raw$Sort1_P6_freq[x] * weight1 + CYP2D6_raw$Sort1_P5_freq[x] * weight2 + CYP2D6_raw$Sort1_P4_freq[x] * weight3 + CYP2D6_raw$Sort1_P3_freq[x])/CYP2D6_raw$exp1_total_freq[x]}
+  
+  if(CYP2D6_raw$Sort2_ratio[x] >= frequency_filter){CYP2D6_raw$exp2_w_ave[x] <- (CYP2D6_raw$Sort2_P6_freq[x] * weight1 + CYP2D6_raw$Sort2_P5_freq[x] * weight2 +   CYP2D6_raw$Sort2_P4_freq[x] * weight3 + CYP2D6_raw$Sort2_P3_freq[x])/CYP2D6_raw$exp2_total_freq[x]}
+  
+}
+
+# Create position, start, and end columns - this means nothing for the doubles
+CYP2D6_raw$position <- as.numeric(gsub("[^0-9]", "", CYP2D6_raw$variant))
+CYP2D6_raw[CYP2D6_raw$variant == "_wt", "position"] <- 0
+CYP2D6_raw$start <- substr(CYP2D6_raw$variant,1,1)
+CYP2D6_raw$end <- substr(CYP2D6_raw$variant,nchar(CYP2D6_raw$variant),nchar(CYP2D6_raw$variant))
+
+# Make a clean class column derived from mut_type
+# First, keep mut_type around
+CYP2D6_raw$class_raw <- CYP2D6_raw$mut_type
+
+# Now normalize the labels to what the downstream code expects
+CYP2D6_raw$class <- CYP2D6_raw$class_raw
+CYP2D6_raw$class[ CYP2D6_raw$class %in% c("1 - synonymous", "synonymous") ] <- "synonymous"
+CYP2D6_raw$class[ CYP2D6_raw$class %in% c("1 - missense", "missense") ] <- "missense"
+CYP2D6_raw$class[ CYP2D6_raw$class %in% c("1 - nonsense", "nonsense") ] <- "nonsense"
+CYP2D6_raw$class[ CYP2D6_raw$class %in% c("frameshift") ] <- "frameshift"
+CYP2D6_raw$class[ CYP2D6_raw$class %in% c("insertion") ]  <- "insertion"
+
+# WT special case
+CYP2D6_raw$class[ CYP2D6_raw$variant %in% c("WT","_wt") ] <- "wt"
+
+# Make 0s NAs to be able to implement the experiment filter
+CYP2D6_raw[CYP2D6_raw == 0] <- NA
+CYP2D6_raw[CYP2D6_raw == "NaN"] <- NA
+
+# Implement experiment filter
+# The ones where expts = 0 are the variants that didn't pass the frequency filter
+CYP2D6_raw$expts <- rowSums(!is.na(CYP2D6_raw[,c("exp1_w_ave","exp2_w_ave")]))
+
+paste("Variants passing filters: ",nrow(subset(CYP2D6_raw, expts>=experiment_filter)))
+
+# Subset to the variants that pass the experiment filter
+CYP2D6_raw <- subset(CYP2D6_raw, expts >= experiment_filter)
+paste("Missense variants passing experiment filter: ",nrow(subset(CYP2D6_raw, class=="missense")))
+paste("Nonsense variants passing experiment filter: ",nrow(subset(CYP2D6_raw, class=="nonsense")))
+paste("Synonymous variants passing experiment filter: ",nrow(subset(CYP2D6_raw, class=="synonymous")))
+paste("Frameshift variants passing experiment filter: ",nrow(subset(CYP2D6_raw, class=="frameshift")))
+
+# Normalize weighted average by nonsense and synonymous
+CYP2D6_raw$score1 <- (CYP2D6_raw$exp1_w_ave - median(subset(CYP2D6_raw, class == "nonsense")$exp1_w_ave, na.rm = TRUE)) / (median(subset(CYP2D6_raw, class == "synonymous")$exp1_w_ave, na.rm = TRUE) - median(subset(CYP2D6_raw, class == "nonsense" & position < 441)$exp1_w_ave, na.rm = TRUE))
+
+CYP2D6_raw$score2 <- (CYP2D6_raw$exp2_w_ave - median(subset(CYP2D6_raw, class == "nonsense")$exp2_w_ave, na.rm = TRUE)) / (median(subset(CYP2D6_raw, class == "synonymous")$exp2_w_ave, na.rm = TRUE) - median(subset(CYP2D6_raw, class == "nonsense" & position < 441)$exp2_w_ave, na.rm = TRUE))
+
+# Combine experiment scores
+CYP2D6_raw$score <- rowMeans(CYP2D6_raw[,c("score1", "score2")], na.rm = TRUE)
+CYP2D6_raw$sd <- apply(CYP2D6_raw[,c("score1", "score2")],1,sd, na.rm = TRUE)
+
+# Generate CI, etc
+CYP2D6_raw$se <- CYP2D6_raw$sd / sqrt(CYP2D6_raw$expts)
+CYP2D6_raw$lower_ci <- CYP2D6_raw$score - qnorm(0.975) * CYP2D6_raw$se 
+CYP2D6_raw$upper_ci <- CYP2D6_raw$score + qnorm(0.975) * CYP2D6_raw$se
+CYP2D6_raw[CYP2D6_raw == "NaN"] <- NA
+
+# Get various synonymous stats
+synonymous_lowest <- quantile(subset(CYP2D6_raw, class == "synonymous")$score, 0.05, na.rm = TRUE)
+synonymous_highest <- quantile(subset(CYP2D6_raw, class == "synonymous")$score, 0.95, na.rm = TRUE)
+paste("Synonymous 95% CI:",round(synonymous_lowest,3),"-",round(synonymous_highest,3))
+nonsense_lowest <- quantile(subset(CYP2D6_raw, class == "nonsense")$score, 0.05, na.rm = TRUE)
+nonsense_highest <- quantile(subset(CYP2D6_raw, class == "nonsense")$score, 0.95, na.rm = TRUE)
+paste("Nonsense 95% CI:",round(nonsense_lowest,3),"-",round(nonsense_highest,3))
+
+CYP2D6_raw$cv<-CYP2D6_raw$sd/CYP2D6_raw$score
+
+# Categorize according to classes: increased, wt-like, possibly_wt-like, possibly_decreased, decreased, possibly_nonsense-like, nonsense-like
+CYP2D6_raw$activity_class <- NA
+for (x in 1:nrow(CYP2D6_raw)){
+  if(is.na(CYP2D6_raw$score[x])){
+    CYP2D6_raw$activity_class[x] <- "unknown"}
+  if(CYP2D6_raw$score[x] < synonymous_lowest){
+    CYP2D6_raw$activity_class[x] <- "possibly_decreased"}
+  if(CYP2D6_raw$score[x] < synonymous_lowest & CYP2D6_raw$upper_ci[x] < synonymous_lowest){
+    CYP2D6_raw$activity_class[x] <- "decreased"}
+  if(CYP2D6_raw$score[x] > synonymous_lowest){
+    CYP2D6_raw$activity_class[x] <- "possibly_wt-like" }
+  if(CYP2D6_raw$score[x] > synonymous_lowest & CYP2D6_raw$lower_ci[x] > synonymous_lowest ) {
+    CYP2D6_raw$activity_class[x] <- "wt-like"}
+  if(CYP2D6_raw$score[x] > synonymous_highest){
+    CYP2D6_raw$activity_class[x] <- "possibly_increased"}
+  if(CYP2D6_raw$score[x] > synonymous_highest & CYP2D6_raw$lower_ci[x] > synonymous_highest){
+    CYP2D6_raw$activity_class[x] <- "increased"}
+  if(CYP2D6_raw$score[x] < nonsense_highest){
+    CYP2D6_raw$activity_class[x] <- "possibly_nonsense-like"}
+  if(CYP2D6_raw$score[x] < nonsense_highest & CYP2D6_raw$upper_ci[x] < nonsense_highest){
+    CYP2D6_raw$activity_class[x] <- "nonsense-like"}
+}
+CYP2D6_raw$activity_class = as.factor(CYP2D6_raw$activity_class)
+
+# Save the activity score files
+CYP2D6_variants <- CYP2D6_raw[,c("variant","class","activity_class","start","position","end","score","sd","expts","se","cv","lower_ci","upper_ci","score1","score2")]
+
+write.table(CYP2D6_variants, file = file.path(path, "Final_Scores/20251106_Pacybara_CYP2D6_activity_scores_singles_fs_and_doubles_12_1e-5_2expts_softfilter_MINQUAL67.csv"),sep = "\t", quote = FALSE, row.names = F, col.names = T)
+
+```
+
+### 13: Set universal filters for the doubles
+### Calculated this frequency filter with the following equation where total number of double read counts = 592373 and the minimum read count for singles using frequency filter = 1e-5 is 48.75957
+### (doubles frequency filter)(total number of double read counts) = minimum read count for singles using 1e-5 for the frequency filter
+### doubles equivalent frequency filter = 8.231228e-05
+```{r Set the filters for CYP2D6 data}
+#### Within the experiment, a variant had to be present a sum of this frequency across the four bins to be included in the analysis
+frequency_filter <- 8.231228e-05
+#### Across the experiments, a variant had to be observed (passing the frequency filter) at least this number of experiments to be included in the analysis
+experiment_filter <- 2
+```
+
+## 14: Calculate activity scores for doubles
+```{r calculating scores}
+# Calculating scores
+
+# Load .m1 files
+CYP2D6_raw <- read.table(file = file.path(path, "Maps/Pacybara_CYP2D6_samples_singles_fs_and_doubles_12_filtered_MINQUAL67.m1"), sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+
+# Get just the frequency and variant columns for replicates 1 and 2
+CYP2D6_raw <- CYP2D6_raw[, c("variant", "mut_type", "Sort1_P6_freq", "Sort1_P5_freq", "Sort1_P4_freq", "Sort1_P3_freq", "Sort2_P6_freq", "Sort2_P5_freq", "Sort2_P4_freq", "Sort2_P3_freq", "Sort1_ratio", "Sort2_ratio")]
+
+# Add up the frequencies, will need this to calculate the scores:
+CYP2D6_raw$exp1_total_freq <- rowSums(CYP2D6_raw[,c("Sort1_P6_freq", "Sort1_P5_freq", "Sort1_P4_freq", "Sort1_P3_freq")], na.rm = TRUE)
+CYP2D6_raw$exp2_total_freq <- rowSums(CYP2D6_raw[,c("Sort2_P6_freq", "Sort2_P5_freq", "Sort2_P4_freq", "Sort2_P3_freq")], na.rm = TRUE)
+
+# Number of variants pre filtering for those in the click-seq data set
+length(CYP2D6_raw$variant) 
+
+# Get rid of all of the variants that aren't in any single one of the replicates
+row_sums <- rowSums(CYP2D6_raw[, 12:13])
+CYP2D6_raw <- CYP2D6_raw[row_sums != 0, ]
+
+# Reset the row numbers
+rownames(CYP2D6_raw) <- NULL
+
+# Number of variants present in the click-seq data set
+length(CYP2D6_raw$variant) 
+
+# Create the respective score columns
+CYP2D6_raw$exp1_w_ave <- NA
+CYP2D6_raw$exp2_w_ave <- NA
+
+# Implement frequency filter, calculate weighted average (optimized weights)
+weight1 = 0.05
+weight2 = 0.2
+weight3 = 0.25
+CYP2D6_raw[is.na(CYP2D6_raw)] <- 0
+
+for(x in 1:nrow(CYP2D6_raw)){
+
+  if(CYP2D6_raw$Sort1_ratio[x] >= frequency_filter){CYP2D6_raw$exp1_w_ave[x] <- (CYP2D6_raw$Sort1_P6_freq[x] * weight1 + CYP2D6_raw$Sort1_P5_freq[x] * weight2 + CYP2D6_raw$Sort1_P4_freq[x] * weight3 + CYP2D6_raw$Sort1_P3_freq[x])/CYP2D6_raw$exp1_total_freq[x]}
+  
+  if(CYP2D6_raw$Sort2_ratio[x] >= frequency_filter){CYP2D6_raw$exp2_w_ave[x] <- (CYP2D6_raw$Sort2_P6_freq[x] * weight1 + CYP2D6_raw$Sort2_P5_freq[x] * weight2 +   CYP2D6_raw$Sort2_P4_freq[x] * weight3 + CYP2D6_raw$Sort2_P3_freq[x])/CYP2D6_raw$exp2_total_freq[x]}
+  
+}
+
+# Create position, start, and end columns - this means nothing for the doubles
+CYP2D6_raw$position <- as.numeric(gsub("[^0-9]", "", CYP2D6_raw$variant))
+CYP2D6_raw[CYP2D6_raw$variant == "_wt", "position"] <- 0
+CYP2D6_raw$start <- substr(CYP2D6_raw$variant,1,1)
+CYP2D6_raw$end <- substr(CYP2D6_raw$variant,nchar(CYP2D6_raw$variant),nchar(CYP2D6_raw$variant))
+
+# Make a clean class column derived from mut_type
+# First, keep mut_type around
+CYP2D6_raw$class_raw <- CYP2D6_raw$mut_type
+
+# Now normalize the labels to what the downstream code expects
+CYP2D6_raw$class <- CYP2D6_raw$class_raw
+CYP2D6_raw$class[ CYP2D6_raw$class %in% c("1 - synonymous", "synonymous") ] <- "synonymous"
+CYP2D6_raw$class[ CYP2D6_raw$class %in% c("1 - missense", "missense") ] <- "missense"
+CYP2D6_raw$class[ CYP2D6_raw$class %in% c("1 - nonsense", "nonsense") ] <- "nonsense"
+CYP2D6_raw$class[ CYP2D6_raw$class %in% c("frameshift") ] <- "frameshift"
+CYP2D6_raw$class[ CYP2D6_raw$class %in% c("insertion") ]  <- "insertion"
+
+# New: double mutants (mut_type == "2")
+CYP2D6_raw$class[CYP2D6_raw$mut_type %in% c("2")] <- "double"
+
+# WT special case
+CYP2D6_raw$class[ CYP2D6_raw$variant %in% c("WT","_wt") ] <- "wt"
+
+# Make 0s NAs to be able to implement the experiment filter
+CYP2D6_raw[CYP2D6_raw == 0] <- NA
+CYP2D6_raw[CYP2D6_raw == "NaN"] <- NA
+
+# Implement experiment filter
+# The ones where expts = 0 are the variants that didn't pass the frequency filter
+CYP2D6_raw$expts <- rowSums(!is.na(CYP2D6_raw[,c("exp1_w_ave","exp2_w_ave")]))
+
+paste("Variants passing filters: ",nrow(subset(CYP2D6_raw, expts>=experiment_filter)))
+
+# Subset to the variants that pass the experiment filter
+CYP2D6_raw <- subset(CYP2D6_raw, expts >= experiment_filter)
+paste("Missense variants passing experiment filter: ",nrow(subset(CYP2D6_raw, class=="missense")))
+paste("Nonsense variants passing experiment filter: ",nrow(subset(CYP2D6_raw, class=="nonsense")))
+paste("Synonymous variants passing experiment filter: ",nrow(subset(CYP2D6_raw, class=="synonymous")))
+paste("Frameshift variants passing experiment filter: ",nrow(subset(CYP2D6_raw, class=="frameshift")))
+paste("Double variants passing experiment filter: ",nrow(subset(CYP2D6_raw, class=="double")))
+
+# normalize weighted average by nonsense and synonymous
+CYP2D6_raw$score1 <- (CYP2D6_raw$exp1_w_ave - median(subset(CYP2D6_raw, class == "nonsense")$exp1_w_ave, na.rm = TRUE)) / (median(subset(CYP2D6_raw, class == "synonymous")$exp1_w_ave, na.rm = TRUE) - median(subset(CYP2D6_raw, class == "nonsense" & position < 441)$exp1_w_ave, na.rm = TRUE))
+
+CYP2D6_raw$score2 <- (CYP2D6_raw$exp2_w_ave - median(subset(CYP2D6_raw, class == "nonsense")$exp2_w_ave, na.rm = TRUE)) / (median(subset(CYP2D6_raw, class == "synonymous")$exp2_w_ave, na.rm = TRUE) - median(subset(CYP2D6_raw, class == "nonsense" & position < 441)$exp2_w_ave, na.rm = TRUE))
+
+# Combine experiment scores
+CYP2D6_raw$score <- rowMeans(CYP2D6_raw[,c("score1", "score2")], na.rm = TRUE)
+CYP2D6_raw$sd <- apply(CYP2D6_raw[,c("score1", "score2")],1,sd, na.rm = TRUE)
+
+# Generate CI, etc
+CYP2D6_raw$se <- CYP2D6_raw$sd / sqrt(CYP2D6_raw$expts)
+CYP2D6_raw$lower_ci <- CYP2D6_raw$score - qnorm(0.975) * CYP2D6_raw$se 
+CYP2D6_raw$upper_ci <- CYP2D6_raw$score + qnorm(0.975) * CYP2D6_raw$se
+CYP2D6_raw[CYP2D6_raw == "NaN"] <- NA
+
+# Get various synonymous stats
+synonymous_lowest <- quantile(subset(CYP2D6_raw, class == "synonymous")$score, 0.05, na.rm = TRUE)
+synonymous_highest <- quantile(subset(CYP2D6_raw, class == "synonymous")$score, 0.95, na.rm = TRUE)
+paste("Synonymous 95% CI:",round(synonymous_lowest,3),"-",round(synonymous_highest,3))
+nonsense_lowest <- quantile(subset(CYP2D6_raw, class == "nonsense")$score, 0.05, na.rm = TRUE)
+nonsense_highest <- quantile(subset(CYP2D6_raw, class == "nonsense")$score, 0.95, na.rm = TRUE)
+paste("Nonsense 95% CI:",round(nonsense_lowest,3),"-",round(nonsense_highest,3))
+
+CYP2D6_raw$cv<-CYP2D6_raw$sd/CYP2D6_raw$score
+
+# categorize according to classes: increased, wt-like, possibly_wt-like, possibly_decreased, decreased, possibly_nonsense-like, nonsense-like
+CYP2D6_raw$activity_class <- NA
+for (x in 1:nrow(CYP2D6_raw)){
+  if(is.na(CYP2D6_raw$score[x])){
+    CYP2D6_raw$activity_class[x] <- "unknown"}
+  if(CYP2D6_raw$score[x] < synonymous_lowest){
+    CYP2D6_raw$activity_class[x] <- "possibly_decreased"}
+  if(CYP2D6_raw$score[x] < synonymous_lowest & CYP2D6_raw$upper_ci[x] < synonymous_lowest){
+    CYP2D6_raw$activity_class[x] <- "decreased"}
+  if(CYP2D6_raw$score[x] > synonymous_lowest){
+    CYP2D6_raw$activity_class[x] <- "possibly_wt-like" }
+  if(CYP2D6_raw$score[x] > synonymous_lowest & CYP2D6_raw$lower_ci[x] > synonymous_lowest ) {
+    CYP2D6_raw$activity_class[x] <- "wt-like"}
+  if(CYP2D6_raw$score[x] > synonymous_highest){
+    CYP2D6_raw$activity_class[x] <- "possibly_increased"}
+  if(CYP2D6_raw$score[x] > synonymous_highest & CYP2D6_raw$lower_ci[x] > synonymous_highest){
+    CYP2D6_raw$activity_class[x] <- "increased"}
+  if(CYP2D6_raw$score[x] < nonsense_highest){
+    CYP2D6_raw$activity_class[x] <- "possibly_nonsense-like"}
+  if(CYP2D6_raw$score[x] < nonsense_highest & CYP2D6_raw$upper_ci[x] < nonsense_highest){
+    CYP2D6_raw$activity_class[x] <- "nonsense-like"}
+}
+CYP2D6_raw$activity_class = as.factor(CYP2D6_raw$activity_class)
+
+# Save the activity score files
+CYP2D6_variants <- CYP2D6_raw[,c("variant","class","activity_class","start","position","end","score","sd","expts","se","cv","lower_ci","upper_ci","score1","score2")]
+
+# Subset to just doubles
+CYP2D6_variants <- subset(CYP2D6_variants, CYP2D6_variants$class == "double")
+
+write.table(CYP2D6_variants, file = file.path(path, "Final_Scores/20251106_Pacybara_CYP2D6_activity_scores_doubles_12_8.231228e-05_2expts_softfilter_MINQUAL67.csv"),sep = "\t", quote = FALSE, row.names = F, col.names = T)
+
+```
+
+### Combine the double variant scores with the single and frameshift scores
+```{r Combine Activity Scores using the respective frequency filters}
+library(dplyr)
+
+# Load in the 2 datasets
+CYP2D6_data_singles_fs <- read.table(file = file.path(path, "Final_Scores/20251106_Pacybara_CYP2D6_activity_scores_singles_fs_and_doubles_12_1e-5_2expts_softfilter_MINQUAL67.csv"), sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+CYP2D6_data_singles_fs <- subset(CYP2D6_data_singles_fs, CYP2D6_data_singles_fs$class != "double")
+
+CYP2D6_data_doubles <- read.table(file = file.path(path, "Final_Scores/20251106_Pacybara_CYP2D6_activity_scores_doubles_12_8.231228e-05_2expts_softfilter_MINQUAL67.csv"), sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+CYP2D6_data_doubles <- subset(CYP2D6_data_doubles, CYP2D6_data_doubles$class == "double")
+
+# Combine the data sets by stacking them together
+CYP2D6_data_combined <- bind_rows(CYP2D6_data_singles_fs, CYP2D6_data_doubles)
+
+# Save this dataframe
+write.table(CYP2D6_data_combined, file = file.path(path, "Final_Scores/20251106_Pacybara_CYP2D6_activity_scores_singles_fs_and_doubles_12_1e-5_8.231228e-05_2expts_softfilter_MINQUAL67.csv"),sep = "\t", quote = FALSE, row.names = F, col.names = T)
+
+```
