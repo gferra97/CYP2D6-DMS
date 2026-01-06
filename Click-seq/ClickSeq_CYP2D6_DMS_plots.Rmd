@@ -1,0 +1,930 @@
+---
+title: "ClickSeq_CYP2D6_DMS_plots"
+author: "Gabrielle Ferra, Clara Amorosi, and Soyeon Showman"
+date: "2025-10-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Load required packages for plots and define your working directory
+```{r Load_packages, message=FALSE, warning = FALSE}
+library(ggplot2)
+library(plyr)
+library(tidyr)
+library(reshape)
+library(scales)
+library(GGally)
+library(grid)
+library(gridExtra)
+library(zoo)
+library(cowplot)
+
+## The package versions used by the author as of 01/12/2023
+packageVersion("ggplot2")     #‘3.4.0’
+packageVersion("plyr")     #‘1.8.8’
+packageVersion("tidyr")     #‘1.2.1’
+packageVersion("reshape")     #‘0.8.9’
+packageVersion("scales")     #‘1.2.1’
+packageVersion("GGally")     #‘2.1.2’
+packageVersion("grid")     #‘4.2.2’
+packageVersion("gridExtra")     #2.3
+packageVersion("zoo")     #1.8.11
+packageVersion("cowplot")     #1.1.1
+
+# plyr causes issues with here()
+# using file.path function with the variable below from now on in the code
+path = "/Users/gabrielleferra/Desktop/CYP-project/20250828_clickseq_dataset_MINQUAL67_final_datasets_and_analysis/"
+```
+
+### Create universal changes to the baseline ggplot2 theme
+```{r Theme}
+theme_new <- theme_set(theme_bw())
+```
+
+### Upload click-seq activity score data
+## Subset to either singles + frameshift or doubles
+```{r Load_data}
+# Load the final click-seq DMS activity scores
+CYP2D6_data <- read.table(file = file.path(path, "Final_Scores/20251106_Pacybara_CYP2D6_activity_scores_singles_fs_and_doubles_12_1e-5_8.231228e-05_2expts_softfilter_MINQUAL67.csv"), sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+
+# subset to just singles and frameshift
+CYP2D6_data <- subset(CYP2D6_data, class != "double" & class != "insertion")
+
+# subset to doubles
+#CYP2D6_data <- subset(CYP2D6_data, class == "double")
+
+```
+
+### Functions to plot score correlation matrix
+```{r score_correlation, warning=FALSE} 
+
+# Scatterplot/correlation plot function
+# This function creates a four paneled figure with the following:
+#   - two activity score distributions for two replicates of click-seq
+#   - scatterplot comparing the variant scores between 2 replicates of click-seq
+#   - the pearson correlation between the two replictes
+scatterplot_correlation_fxn <- function(data, mapping, ...) {
+
+  xvar <- rlang::as_label(mapping$x)
+  yvar <- rlang::as_label(mapping$y)
+
+  ggplot(data = data, aes_string(x = yvar, y = xvar)) +
+    geom_point(alpha = 0.01, ...) +
+    scale_x_continuous(
+      breaks = c(0, 0.5, 1.0, 1.5),
+      labels = c("0.0", "0.5", "1.0", "1.5")
+    ) +
+    scale_y_continuous(
+      breaks = c(0, 0.5, 1.0, 1.5),
+      labels = c("0.0", "0.5", "1.0", "1.5")
+    ) +
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_blank(),
+      axis.line = element_line(colour = "black")
+    )
+}
+
+# Histogram function - plots the activity score distribution with variants labeled by mutation type
+histogram_fxn <- function(data, mapping, ...){
+  # Set the desired order of the class factor levels
+  data$class <- factor(data$class, levels = c("double", "missense", "frameshift", "nonsense", "synonymous"))
+  
+  p <- ggplot(data = data, mapping = mapping) + 
+    geom_histogram(aes(fill=class), binwidth=0.15, alpha = 0.5, size=0.2, position="stack", color="black") +
+    scale_fill_manual(values=c("double"="#FFDB58", "frameshift" = "#FF7518", "missense"="grey", "nonsense"="red", "synonymous"="blue")) + 
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_blank(), 
+          axis.line = element_line(colour = "black"))
+  p
+}
+
+```
+
+### Set up variables for the score correlation matrix 
+```{r Choose score correlation matrix variables}
+
+# Choose which replicates you want to compare and column names
+a = "score1"
+b = "score2"
+
+```
+
+### Plot and save the score correlation matrix
+### Uncomment what you need - do you just want doubles, just singles, or both?
+```{r}
+# Create the dataset with the desired scores_______________________________________________
+cyp_variants_min <- CYP2D6_data[,c("class", a, b)]
+
+# Rename the columns based on the scores being compared
+colnames(cyp_variants_min) <- c("class", a, b)
+
+# Subset to only singles and frameshift
+cyp_variants_min <- cyp_variants_min[cyp_variants_min$class!="double",]
+end <- "singles_fs_12_1e-5"
+
+# Subset to only singles
+#cyp_variants_min <- cyp_variants_min[cyp_variants_min$class!="double" & cyp_variants_min$class!="frameshift",]
+#end <- "singles_12_1e-5"
+
+# Subset to only doubles
+#cyp_variants_min <- cyp_variants_min[cyp_variants_min$class=="double",]
+#end <- "doubles_12_1e-5681e-5"
+
+#__________________________________________________________________________________________
+
+# Calculate the Pearson correlation between the scores
+cyp_pearson_cor_matrix <- as.matrix(cor(cyp_variants_min[,c(a,b)], use="pairwise.complete.obs", method = "pearson")) ###pairwise.complete.obs uses the non-NA values when calculating the correlation between score1 and score2  , Pearson : the linear relationship between two continuous variables
+
+# Plot the correlation between the two distributions of activity scores
+cyp_scatterplot_matrix_pearson <- ggpairs(
+  cyp_variants_min,
+  columns = c(a, b),
+  lower = list(continuous = scatterplot_correlation_fxn),
+  diag  = list(continuous = histogram_fxn),
+  columnLabels = c("Replicate 1",
+                   "Replicate 2")
+) +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(face = "bold"),        # facet labels
+    axis.title.x = element_text(face = "bold"),      # x-axis label
+    axis.title.y = element_text(face = "bold")       # y-axis label
+  )
+
+# Save the plots as .png and .pdf 
+ggsave(file = file.path(path, paste("Final_Plots/20251225_Pacybara_replicate_scatterplot_matrix_", end, "_filtered_MINQUAL67.png", sep = "")), plot = cyp_scatterplot_matrix_pearson, device = "png", height = 14, width = 14, units = "cm")
+ggsave(file = file.path(path, paste("Final_Plots/20251225_Pacybara_replicate_scatterplot_matrix_", end, "_filtered_MINQUAL67.pdf", sep = "")), plot = cyp_scatterplot_matrix_pearson, device = "pdf", height = 14, width = 14, units = "cm")
+
+```
+
+# Plot the combined activity score distribution for click-seq replicates 1 and 2
+# Uncomment lines depending on which variants you want to plot
+# Add other variants of interest if you would like!
+```{r Class_score_histogram, warning=FALSE}
+
+# Load combined activity score data
+CYP2D6_data <- read.table(file = file.path(path, "Final_Scores/20251106_Pacybara_CYP2D6_activity_scores_singles_fs_and_doubles_12_1e-5_8.231228e-05_2expts_softfilter_MINQUAL67.csv"), sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+#end = "singles_fs_and_doubles_12_1e-5_5681e-5" # this variable determines the file name
+#i = 100 # this variable determines the y-axis and where the allele of interest labels get plotted
+#a = "alleles" # Uncomment this variant if you want to include the alleles of interest
+
+## Subset to only the singles and frameshift
+CYP2D6_data <- subset(CYP2D6_data, class != "double")
+end = "singles_fs_12_1e-5"
+i = 150
+a = "alleles"
+
+## Subset to only the doubles
+#CYP2D6_data <- subset(CYP2D6_data, class == "double")
+#end = "doubles_12_5681e-5"
+#i = 350
+#a = "no alleles" # Uncomment if you don't want to include the alleles of interest 
+                 # the single aa changes cannot be included once you have subsetted the data to just doubles
+                 # feel free to include double variants of interest
+
+#__________________________________________________________________________________________
+
+# Reorder factor levels for nice legend order
+CYP2D6_data$class <- factor(
+  CYP2D6_data$class,
+  levels = c("missense", "frameshift", "nonsense", "synonymous")
+)
+
+# Base histogram
+hist_plot <- ggplot() +  
+  geom_histogram(
+    data = subset(CYP2D6_data, class != "wt"),
+    aes(x = score, fill = class),
+    binwidth = 0.05,
+    alpha = 0.5,
+    size = 0.25,
+    position = "stack",
+    color = "black"
+  ) +
+  scale_fill_manual(
+    name = "Class",
+    values = c(
+      "frameshift" = "#FF7518",
+      "missense"   = "grey",
+      "nonsense"   = "red",
+      "synonymous" = "blue"
+    ),
+    labels = c(
+      "missense"   = "Missense",
+      "frameshift" = "Frameshift",
+      "nonsense"   = "Nonsense",
+      "synonymous" = "Synonymous"
+    )
+  ) +
+  theme_classic() +
+  ggtitle("Click-seq Activity Score Distribution") +
+  theme(
+    axis.text.x   = element_text(color = "black", size = 12),
+    axis.text.y   = element_text(color = "black", size = 12),
+    axis.title.x  = element_text(size = 16, face = "bold"),
+    axis.title.y  = element_text(size = 16, face = "bold"),
+    legend.position = "right",
+    legend.text   = element_text(size = 14),
+    legend.title  = element_text(size = 16, face = "bold"),
+    plot.title    = element_text(size = 18, face = "bold", hjust = 0.5)
+  ) +
+  xlab("Combined Activity Score") +
+  ylab("Count") +
+  scale_y_continuous(limits = c(0, 600 - i))
+
+# Highlight alleles of interest with dashed vertical lines
+if (a == "alleles") {
+
+  # Get the activity scores for each allele of interest
+  allele_scores <- c(
+    CYP2D6_data$score[CYP2D6_data$variant == "P34S"],
+    CYP2D6_data$score[CYP2D6_data$variant == "A90V"],
+    CYP2D6_data$score[CYP2D6_data$variant == "R441C"]
+  )
+
+  allele_name <- c("P34S", "A90V", "R441C")
+
+  # Determine where the allele of interest labels get plotted
+  allele_y <- c(375 - i, 600 - i, 525 - i)
+
+  alleles <- data.frame(
+    allele_scores = allele_scores,
+    allele_y      = allele_y,
+    allele_name   = allele_name
+  )
+
+  # Add dashed vertical line for each allele score
+  hist_plot <- hist_plot +
+    geom_segment(
+      data = alleles,
+      aes(
+        x = allele_scores,
+        xend = allele_scores,
+        y = 0,
+        yend = allele_y
+      ),
+      linetype = "dashed",
+      linewidth = 0.6
+    ) +
+    # Label each allele just above the top of its dashed line
+    geom_text(
+      data = alleles,
+      aes(
+        x = allele_scores,
+        y = allele_y,
+        label = allele_name
+      ),
+      vjust = -0.5,  # put label a little above the line
+      size = 4,
+      fontface = "bold"
+    ) +
+    # Make sure the y limit still comfortably includes the labels
+    scale_y_continuous(
+      limits = c(0, 600 - i),
+      expand = expansion(mult = c(0, 0.05))  # give a little headroom
+    )
+}
+
+# Save the histogram plot
+ggsave(file = file.path(path, paste("Final_Plots/20251106_Pacybara_CYP2D6_combined_activity_scores_histogram_", end, "_softfilter_MINQUAL67.png", sep = "")), plot = hist_plot, device = "png", height =3.5, width = 5)
+
+ggsave(file = file.path(path, paste("Final_Plots/20251106_Pacybara_CYP2D6_combined_activity_scores_histogram_", end, "_softfilter_MINQUAL67.pdf", sep = "")), plot = hist_plot, device = "pdf", height =3.5, width = 5)
+
+```
+
+### Plot the spread of synonymous variants
+```{r synonymous variants}
+
+# Load the combined activity score data
+CYP2D6_data <- read.table(file = file.path(path, "Final_Scores/Pacybara_CYP2D6_activity_scores_singles_fs_and_doubles_12_1e-5_5681e-5_2expts_softfilter_MINQUAL67.csv"), sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+
+# Subset to just the synonymous variants
+syn_var <- subset(CYP2D6_data, CYP2D6_data$class == "synonymous")
+length(syn_var$variant)
+
+# Histogram plot
+hist_plot <- ggplot() +  
+  geom_histogram(
+    data = subset(syn_var, class != "wt"),
+    aes(x = score, fill = class),
+    binwidth = 0.05,
+    alpha = 0.5,
+    size = 0.25,
+    position = "stack",
+    color = "black"
+  ) +
+  scale_fill_manual(
+    name = "Class",
+    values = c(
+      "synonymous" = "blue"
+    ),
+    labels = c("Synonymous")
+  ) + 
+  theme_classic() +
+  ggtitle("Click-seq Activity Score Distribution") +
+  theme(
+    axis.text.x   = element_text(color = "black", size = 12),
+    axis.text.y   = element_text(color = "black", size = 12),
+    axis.title.x  = element_text(size = 16, face = "bold"),
+    axis.title.y  = element_text(size = 16, face = "bold"),
+    legend.position = "right",
+    legend.text   = element_text(size = 14),
+    legend.title  = element_text(size = 16, face = "bold"),
+    plot.title    = element_text(size = 18, face = "bold", hjust = 0.5)
+  ) +
+  xlab("Combined Activity Score") +
+  ylab("Count") 
+
+# Save the histogram plot
+ggsave(file = file.path(path, "Final_Plots/Pacybara_CYP2D6_combined_activity_scores_syn_histogram_12_1e-5_softfilter_MINQUAL67.png"), plot = hist_plot, device = "png", height =3, width = 5)
+ggsave(file = file.path(path, "Final_Plots/Pacybara_CYP2D6_combined_activity_scores_syn_histogram_12_1e-5_softfilter_MINQUAL67.pdf"), plot = hist_plot, device = "pdf", height =3, width = 5)
+
+# What does the data look like for the synonymous variant with the score close to 0?
+min_index <- which.min(syn_var$score)
+View(syn_var[min_index, ])
+
+# Plot the combined activity score for the synonymous variants vs. their standard error
+s_v_se <- ggplot(data = syn_var, aes(x = score, y = se, fill = class)) +
+              geom_point(color = "#D94E4E") +
+              theme_classic() +
+              xlab("Combined Activity Score") +
+              ylab("Standard Error") +
+              theme_classic() +
+              scale_fill_manual(
+                name = "Class",
+                values = c(
+                  "synonymous" = "#D94E4E"
+                ),
+                labels = c("Synonymous")
+              ) +
+              ggtitle("Synonymous Variant Combined Activity Scores vs. Standard Error") +
+              theme(
+                axis.text.x = element_text(color = "black", size = 5),
+                axis.text.y = element_text(color = "black", size = 5),
+                legend.position = "right",
+                axis.title = element_text(size = 7),
+                legend.text = element_text(size = 7),
+                legend.title = element_text(size = 7, face = "bold"),
+                plot.title = element_text(size = 9, face = "bold", hjust = 0.5),
+                legend.box = "solid",  # Adds a box around the legend
+                legend.box.margin = margin(10, 10, 10, 10),  # Adjusts the margin around the box
+                legend.background = element_rect(fill = "white", color = "black")
+              )
+
+# Save the scatter plot 
+ggsave(file = file.path(path, "Final_Plots/Pacybara_CYP2D6_combined_activity_scores_syn_scatterplot_score_v_se_12.png"), plot = s_v_se, device = "png", height =3, width = 5)
+ggsave(file = file.path(path, "Final_Plots/Pacybara_CYP2D6_combined_activity_scores_syn_scatterplot_score_v_se_12.pdf"), plot = s_v_se, device = "pdf", height =3, width = 5)
+
+# Plot the combined activity score for the synonymous variants vs. their standard error
+s_v_sd <- ggplot(data = syn_var, aes(x = score, y = sd, fill = class)) +
+              geom_point(color = "#D94E4E") +
+              theme_classic() +
+              xlab("Combined Activity Score") +
+              ylab("Standard Deviation") +
+              theme_classic() +
+              scale_fill_manual(
+                name = "Class",
+                values = c(
+                  "synonymous" = "#D94E4E"
+                ),
+                labels = c("Synonymous")
+              ) +
+              ggtitle("Synonymous Variant Combined Activity Scores vs. Standard Deviation") +
+              theme(
+                axis.text.x = element_text(color = "black", size = 5),
+                axis.text.y = element_text(color = "black", size = 5),
+                legend.position = "right",
+                axis.title = element_text(size = 7),
+                legend.text = element_text(size = 7),
+                legend.title = element_text(size = 7, face = "bold"),
+                plot.title = element_text(size = 9, face = "bold", hjust = 0.5),
+                legend.box = "solid",  # Adds a box around the legend
+                legend.box.margin = margin(10, 10, 10, 10),  # Adjusts the margin around the box
+                legend.background = element_rect(fill = "white", color = "black")
+              )
+
+# Save the scatter plot 
+ggsave(file = file.path(path, "Final_Plots/Pacybara_CYP2D6_combined_activity_scores_syn_scatterplot_score_v_sd_12.png"), plot = s_v_sd, device = "png", height =3, width = 5)
+ggsave(file = file.path(path, "Final_Plots/Pacybara_CYP2D6_combined_activity_scores_syn_scatterplot_score_v_sd_12.pdf"), plot = s_v_sd, device = "pdf", height =3, width = 5)
+
+```
+
+### Plot the spread of nonsense variants
+```{r nonsense variants}
+
+# Load the combined activity score data
+CYP2D6_data <- read.table(file = file.path(path, "Final_Scores/Pacybara_CYP2D6_activity_scores_singles_fs_and_doubles_12_1e-5_5681e-5_2expts_softfilter_MINQUAL67.csv"), sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+
+# Subset to just the nonsense variants
+non_var <- subset(CYP2D6_data, CYP2D6_data$class == "nonsense")
+length(non_var$variant)
+
+# Histogram plot
+hist_plot <- ggplot() +  
+  geom_histogram(
+    data = subset(non_var, class != "wt"),
+    aes(x = score, fill = class),
+    binwidth = 0.05,
+    alpha = 0.5,
+    size = 0.25,
+    position = "stack",
+    color = "black"
+  ) +
+  scale_fill_manual(
+    name = "Class",
+    values = c(
+      "nonsense" = "red"
+    ),
+    labels = c("Nonsense")
+  ) + 
+  theme_classic() +
+  ggtitle("Click-seq Activity Score Distribution") +
+  theme(
+    axis.text.x   = element_text(color = "black", size = 12),
+    axis.text.y   = element_text(color = "black", size = 12),
+    axis.title.x  = element_text(size = 16, face = "bold"),
+    axis.title.y  = element_text(size = 16, face = "bold"),
+    legend.position = "right",
+    legend.text   = element_text(size = 14),
+    legend.title  = element_text(size = 16, face = "bold"),
+    plot.title    = element_text(size = 18, face = "bold", hjust = 0.5)
+  ) +
+  xlab("Combined Activity Score") +
+  ylab("Count") +
+  scale_x_continuous(limits = c(-0.4,1.2))
+
+# Save the histogram plot
+ggsave(file = file.path(path, "Final_Plots/Pacybara_CYP2D6_combined_activity_scores_non_histogram_12_1e-5_softfilter_MINQUAL67.png"), plot = hist_plot, device = "png", height =3, width = 5)
+ggsave(file = file.path(path, "Final_Plots/Pacybara_CYP2D6_combined_activity_scores_non_histogram_12_1e-5_softfilter_MINQUAL67.pdf"), plot = hist_plot, device = "pdf", height =3, width = 5)
+
+# What does the data look like for the nonsense variants with the highest scores?
+max_index <- which.max(non_var$score)
+View(non_var[max_index, ])
+
+# Plot the combined activity score for the nonsense variants vs. their standard error
+n_v_se <- ggplot(data = non_var, aes(x = score, y = se, fill = class)) +
+              geom_point(color = "#5A6F8B") +
+              theme_classic() +
+              xlab("Combined Activity Score") +
+              ylab("Standard Error") +
+              theme_classic() +
+              scale_fill_manual(
+                name = "Class",
+                values = c(
+                  "nonsense" = "#5A6F8B"
+                ),
+                labels = c("Nonsense")
+              ) +
+              ggtitle("Nonsense Variant Combined Activity Scores vs. Standard Error") +
+              theme(
+                axis.text.x = element_text(color = "black", size = 5),
+                axis.text.y = element_text(color = "black", size = 5),
+                legend.position = "right",
+                axis.title = element_text(size = 7),
+                legend.text = element_text(size = 7),
+                legend.title = element_text(size = 7, face = "bold"),
+                plot.title = element_text(size = 9, face = "bold", hjust = 0.5),
+                legend.box = "solid",  # Adds a box around the legend
+                legend.box.margin = margin(10, 10, 10, 10),  # Adjusts the margin around the box
+                legend.background = element_rect(fill = "white", color = "black")
+              )
+
+# Save the scatter plot 
+ggsave(file = file.path(path, "Final_Plots/Pacybara_CYP2D6_combined_activity_scores_non_scatterplot_score_v_se_12.png"), plot = n_v_se, device = "png", height =3, width = 5)
+ggsave(file = file.path(path, "Final_Plots/Pacybara_CYP2D6_combined_activity_scores_non_scatterplot_score_v_se_12.pdf"), plot = n_v_se, device = "pdf", height =3, width = 5)
+
+# Plot the combined activity score for the nonsense variants vs. their standard error
+n_v_sd <- ggplot(data = non_var, aes(x = score, y = sd, fill = class)) +
+              geom_point(color = "#5A6F8B") +
+              theme_classic() +
+              xlab("Combined Activity Score") +
+              ylab("Standard Deviation") +
+              theme_classic() +
+              scale_fill_manual(
+                name = "Class",
+                values = c(
+                  "nonsense" = "#5A6F8B"
+                ),
+                labels = c("Nonsense")
+              ) +
+              ggtitle("Nonsense Variant Combined Activity Scores vs. Standard Deviation") +
+              theme(
+                axis.text.x = element_text(color = "black", size = 5),
+                axis.text.y = element_text(color = "black", size = 5),
+                legend.position = "right",
+                axis.title = element_text(size = 7),
+                legend.text = element_text(size = 7),
+                legend.title = element_text(size = 7, face = "bold"),
+                plot.title = element_text(size = 9, face = "bold", hjust = 0.5),
+                legend.box = "solid",  # Adds a box around the legend
+                legend.box.margin = margin(10, 10, 10, 10),  # Adjusts the margin around the box
+                legend.background = element_rect(fill = "white", color = "black")
+              )
+
+# Save the scatter plot 
+ggsave(file = file.path(path, "Final_Plots/Pacybara_CYP2D6_combined_activity_scores_non_scatterplot_score_v_sd_12.png"), plot = n_v_sd, device = "png", height =3, width = 5)
+ggsave(file = file.path(path, "Final_Plots/Pacybara_CYP2D6_combined_activity_scores_non_scatterplot_score_v_sd_12.pdf"), plot = n_v_sd, device = "pdf", height =3, width = 5)
+
+```
+
+### Plot the spread of synonymous and nonsense
+```{r synonymous + nonsense variants}
+
+# Load the combined activity score data
+CYP2D6_data <- read.table(file = file.path(path, "Final_Scores/20251106_Pacybara_CYP2D6_activity_scores_singles_fs_and_doubles_12_1e-5_8.231228e-05_2expts_softfilter_MINQUAL67.csv"), sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+
+# Subset to synonymous + nonsense variants
+syn_non_var <- subset(CYP2D6_data, class == "synonymous" | class == "nonsense")
+length(syn_non_var$variant)
+
+# Histogram plot
+hist_plot <- ggplot() +  
+  geom_histogram(
+    data = subset(syn_non_var, class != "wt"),
+    aes(x = score, fill = class),
+    binwidth = 0.05,
+    alpha = 0.5,
+    size = 0.25,
+    position = "stack",
+    color = "black"
+  ) +
+  scale_fill_manual(
+    name = "Class",
+    values = c(
+      "synonymous" = "blue",
+      "nonsense" = "red"
+    ),
+    labels = c("Nonsense", "Synonymous")
+  ) + 
+  theme_classic() +
+  ggtitle("Click-seq Activity Score Distribution") +
+  theme(
+    axis.text.x   = element_text(color = "black", size = 12),
+    axis.text.y   = element_text(color = "black", size = 12),
+    axis.title.x  = element_text(size = 16, face = "bold"),
+    axis.title.y  = element_text(size = 16, face = "bold"),
+    legend.position = "right",
+    legend.text   = element_text(size = 14),
+    legend.title  = element_text(size = 16, face = "bold"),
+    plot.title    = element_text(size = 18, face = "bold", hjust = 0.5)
+  ) +
+  xlab("Combined Activity Score") +
+  ylab("Count") 
+
+# Save the histogram plot
+ggsave(file = file.path(path, "Final_Plots/20251106_Pacybara_CYP2D6_combined_activity_scores_syn_and_non_histogram_12_1e-5_softfilter_MINQUAL67.png"), plot = hist_plot, device = "png", height =3, width = 5)
+ggsave(file = file.path(path, "Final_Plots/20251106_Pacybara_CYP2D6_combined_activity_scores_syn_and_non_histogram_12_1e-5_softfilter_MINQUAL67.pdf"), plot = hist_plot, device = "pdf", height =3, width = 5)
+
+```
+
+### Heatmap pre-processing
+```{r Heatmap_pre-processing}
+
+# Load the combined activity score data
+CYP2D6_data <- read.table(file = file.path(path, "Final_Scores/20251106_Pacybara_CYP2D6_activity_scores_singles_fs_and_doubles_12_1e-5_8.231228e-05_2expts_softfilter_MINQUAL67.csv"), sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+
+# Load the CYP2D6 sequence - amino acid level
+CYP2D6_seq <- "MGLEALVPLAVIVAIFLLLVDLMHRRQRWAARYPPGPLPLPGLGNLLHVDFQNTPYCFDQLRRRFGDVFSLQLAWTPVVVLNGLAAVREALVTHGEDTADRPPVPITQILGFGPRSQGVFLARYGPAWREQRRFSVSTLRNLGLGKKSLEQWVTEEAACLCAAFANHSGRPFRPNGLLDKAVSNVIASLTCGRRFEYDDPRFLRLLDLAQEGLKEESGFLREVLNAVPVLLHIPALAGKVLRFQKAFLTQLDELLTEHRMTWDPAQPPRDLTEAFLAEMEKAKGNPESSFNDENLRIVVADLFSAGMVTTSTTLAWGLLLMILHPDVQRRVQQEIDDVIGQVRRPEMGDQAHMPYTTAVIHEVQRFGDIVPLGVTHMTSRDIEVQGFRIPKGTTLITNLSSVLKDEAVWEKPFRFHPEHFLDAQGHFVKPEAFLPFSAGRRACLGEPLARMELFLFFTSLLQHFSFSVPTGQPRPSHHGVFAFLVSPSPYELCAVPR"
+
+# Create dataframe 
+wtseqframe <- data.frame("position" = seq(1,nchar(CYP2D6_seq)))
+wtseqframe$end <- rep("NA",nchar(CYP2D6_seq))
+
+# Assign WT aa at each position
+for (x in 1:nchar(CYP2D6_seq)){wtseqframe$end[x] <- substr(CYP2D6_seq,x,x)}
+
+# All WT get same score at all positions
+wtseqframe$score <- CYP2D6_data[CYP2D6_data$class == "wt","score"]
+
+# Get the lower bound - will be later used when plotting the heatmap
+CYP2D6_lower_bound_act <- as.numeric(quantile(subset(CYP2D6_data, class == "missense")$score, 0.1, na.rm = TRUE))
+
+# Create a list of all position x variants: 1A, 2A, etc. 10437 elements for 2D6
+position_vector <- seq(1:nchar(CYP2D6_seq))
+aa_vector <- c("A","V","I","L","M","F","Y","W","S","T","N","Q","C","G","P","R","H","K","D","E","*")
+full_combinations <- as.vector(outer(position_vector, aa_vector, paste, sep=""))
+
+# Get the missing positions in activity data:  
+missing_combinations_act <- data.frame("variant" = full_combinations[!(full_combinations %in% substr(subset(CYP2D6_data, !is.na(score))$variant,2,10))])
+missing_combinations_act$position <- gsub("[^0-9]","",missing_combinations_act$variant)
+missing_combinations_act$position <- as.numeric(missing_combinations_act$position)
+missing_combinations_act$end <- gsub("[0-9]","",missing_combinations_act$variant)
+missing_combinations_act$end <- factor(missing_combinations_act$end, levels = c("A","V","I","L","M","F","Y","W","S","T","N","Q","C","G","P","R","H","K","D","E","*"))
+
+# Subset the data to just missense and nonsense variants
+CYP2D6_subset = subset(CYP2D6_data, (class == "missense" | class == "nonsense"))
+
+# Get the upper and lower bounds for the heat map______________________________________________________________
+synonymous_lowest <- quantile(subset(CYP2D6_data, class == "synonymous")$score, 0.05, na.rm = TRUE)
+synonymous_highest <- quantile(subset(CYP2D6_data, class == "synonymous")$score, 0.95, na.rm = TRUE)
+nonsense_lowest <- quantile(subset(CYP2D6_data, class == "nonsense")$score, 0.05, na.rm = TRUE)
+nonsense_highest <- quantile(subset(CYP2D6_data, class == "nonsense")$score, 0.95, na.rm = TRUE)
+
+upper_bound <- synonymous_highest
+white_bound <- 1
+lower_bound <- nonsense_lowest
+
+```
+
+### CYP2D6 heatmaps, one-line
+```{r Heatmaps_one_line, warning=FALSE, fig.height = 6, fig.width = 10}
+library(ggplot2)
+library(dplyr)
+
+# (Optional) set a preferred amino-acid order for the x-axis
+AA_order <- c("A","C","D","E","F","G","H","I","K","L","M","N","P","Q","R","S","T","V","W","Y","*")
+
+# Ensure consistent factor levels across all data frames that use `end`
+for (df_name in c("missing_combinations_act", "CYP2D6_subset", "wtseqframe")) {
+  if (exists(df_name)) {
+    df <- get(df_name)
+    if (is.character(df$end) || is.factor(df$end)) {
+      # keep only levels present, preserve AA_order
+      present <- intersect(AA_order, unique(as.character(df$end)))
+      df$end <- factor(df$end, levels = present)
+      assign(df_name, df)
+    }
+  }
+}
+
+breaks_vec <- c(0.0, 0.5, 1.0)
+
+CYP2D6_full_variant_heatmap_vert <- ggplot() +
+  # 1) Missing data tiles
+  geom_tile(
+    data = missing_combinations_act,
+    aes(x = end, y = position),
+    fill = "grey70"
+  ) +
+  # 2) Middle range (gradient)
+  geom_tile(
+    data = subset(CYP2D6_subset, score > lower_bound & score < upper_bound),
+    aes(x = end, y = position, fill = score)
+  ) +
+  # 3) Low scores (solid red)
+  geom_tile(
+    data = subset(CYP2D6_subset, score <= lower_bound),
+    aes(x = end, y = position),
+    fill = "red"
+  ) +
+  # 4) High scores (solid blue)
+  geom_tile(
+    data = subset(CYP2D6_subset, score >= upper_bound),
+    aes(x = end, y = position),
+    fill = "blue"
+  ) +
+  # 5) WT tiles (on gradient)
+  geom_tile(
+    data = wtseqframe,
+    aes(x = end, y = position, fill = score)
+  ) +
+  # 6) Tiny WT marker
+  geom_point(
+    data = wtseqframe,
+    aes(x = end, y = position),
+    shape = 15, size = 0.6, color = "black"
+  ) +
+
+  # Axes: AA on x (discrete), position on y (continuous, reversed so 1 is at top)
+  scale_x_discrete(drop = FALSE) +
+  scale_y_reverse(
+    limits = c(498, 1),
+    expand = c(0, 0),
+    breaks = c(1, seq(10, 497, 10))
+  ) +
+  xlab("Mutant amino acid") +
+  ylab("Position") +
+
+  scale_fill_gradientn(
+    name    = "Click-seq Activity Score",
+    colours = c("red", "white", "blue"),
+    values  = scales::rescale(c(lower_bound, white_bound, upper_bound)),
+    limits  = range(c(lower_bound, upper_bound, breaks_vec)),  # ensure 0, 0.5, 1 are inside
+    oob     = scales::squish,
+    breaks  = breaks_vec,
+    labels  = c("0.0", "0.5", "1.0"),
+    guide = guide_colorbar(
+      title.position = "top",
+      title.hjust    = 0.5,
+      barwidth       = 8,
+      barheight      = 0.6,
+      direction      = "horizontal",
+      label.position = "bottom",
+      ticks          = TRUE
+    )
+  ) +
+
+  theme(
+    panel.background  = element_rect(fill = "white"),
+    panel.grid.major  = element_line(colour = "grey90"),
+    legend.position   = "bottom",
+    legend.box.margin = margin(5, 0, 5, 0),
+
+    # axis text
+    axis.text.x = element_text(size = 11, angle = 0, hjust = 0.5, vjust = 0.5, color = "black"),
+    axis.text.y = element_text(size = 11, color = "black"),
+
+    # axis titles
+    axis.title.x = element_text(size = 12, face = "bold", color = "black"),
+    axis.title.y = element_text(size = 12, face = "bold", color = "black"),
+
+    # legend
+    legend.title = element_text(size = 12, face = "bold", color = "black"),
+    legend.text  = element_text(size = 10, color = "black")
+  )
+
+# Save the vertical heatmap 
+ggsave(
+  file = file.path(path, "Final_Plots/20251224_Pacybara_CYP2D6_heatmap_vertical.png"),
+  plot = CYP2D6_full_variant_heatmap_vert,
+  width = 4, height = 11, units = "in", dpi = 300, bg = "white", limitsize = FALSE
+)
+
+ggsave(
+  file = file.path(path, "Final_Plots/20251224_Pacybara_CYP2D6_heatmap_vertical.pdf"),
+  plot = CYP2D6_full_variant_heatmap_vert,
+  width = 4, height = 11, units = "in", device = pdf
+)
+
+#Horizontal
+CYP2D6_full_variant_heatmap_hori <- ggplot() +
+  # 1. Missing data (no score at all)
+  geom_tile(
+    data = missing_combinations_act,
+    aes(x = position, y = end),
+    fill = "grey70"
+  ) +
+
+  # 2. Middle range: between lower_bound and upper_bound
+  #    These get the continuous red->white->blue scale by score
+  geom_tile(
+    data = subset(CYP2D6_subset, score > lower_bound & score < upper_bound),
+    aes(x = position, y = end, fill = score)
+  ) +
+
+  # 3. Low scores: <= lower_bound
+  #    These should be pure red, regardless of gradient
+  geom_tile(
+    data = subset(CYP2D6_subset, score <= lower_bound),
+    aes(x = position, y = end),
+    fill = "red"
+  ) +
+
+  # 4. High scores: >= upper_bound
+  #    These should be pure blue, regardless of gradient
+  geom_tile(
+    data = subset(CYP2D6_subset, score >= upper_bound),
+    aes(x = position, y = end),
+    fill = "blue"
+  ) +
+
+  # 5. WT tiles (use their numeric score on the gradient too)
+  geom_tile(
+    data = wtseqframe,
+    aes(x = position, y = end, fill = score)
+  ) +
+
+  # 6. Tiny square marker at WT position so you can always spot WT
+  geom_point(
+    data = wtseqframe,
+    aes(x = position, y = end),
+    shape = 15,
+    size = 0.6,
+    color = "black"
+  ) +
+
+  # axes etc
+  scale_x_continuous(
+    limits = c(0, 498),
+    expand = c(0, 0),
+    breaks = c(1, seq(10, 497, 10))
+  ) +
+  scale_y_discrete(
+    limits = rev(levels(missing_combinations_act$end))
+  ) +
+  xlab("Position") +
+  ylab("Mutation") +
+
+  # fill scale for ONLY the geoms that mapped aes(fill = score)
+  # (mid-range + WT)
+  # fill scale with labeled legend
+# horizontal colorbar legend
+scale_fill_gradientn(
+  name   = "Click-seq Activity Score",     # legend title text
+  colours = c("red", "white", "blue"),
+  values  = rescale(c(lower_bound, white_bound, upper_bound)),
+  limits  = c(lower_bound, upper_bound),
+  oob     = scales::squish,
+  guide = guide_colorbar(
+    title.position = "top",      # title above the color bar
+    title.hjust = 0.5,           # center the title
+    barwidth = 8,                # width of color bar (adjust to taste)
+    barheight = 0.6,             # thin horizontal bar
+    direction = "horizontal",    # horizontal orientation
+    label.position = "bottom",   # numbers below the bar
+    ticks = TRUE                 # optional tick marks
+  )
+) +
+
+theme(
+  panel.background  = element_rect(fill = "white"),
+  legend.position   = "bottom",   # place entire legend below the plot
+  legend.box.margin = margin(5, 0, 5, 0),
+  panel.grid.major  = element_line(colour = "grey90"),
+
+  # axis text
+  axis.text.x = element_text(
+    size = 11,
+    angle = 90,
+    hjust = 1,
+    vjust = 0.5,
+    color = "black"
+  ),
+  axis.text.y = element_text(size = 11, color = "black"),
+
+  # axis titles (bold + slightly larger)
+  axis.title.x = element_text(size = 12, face = "bold", color = "black"),
+  axis.title.y = element_text(size = 12, face = "bold", color = "black"),
+
+  # legend title + text formatting
+  legend.title = element_text(size = 12, face = "bold", color = "black"),
+  legend.text  = element_text(size = 10, color = "black")
+)
+
+# Save the horizontal heatmap
+ggsave(
+  file = file.path(path, "Final_Plots/20251224_Pacybara_CYP2D6_heatmap.png"),
+  plot = CYP2D6_full_variant_heatmap_hori,
+  width = 4, height = 11, units = "in", dpi = 300, bg = "white", limitsize = FALSE
+)
+
+ggsave(
+  file = file.path(path, "Final_Plots/20251224_Pacybara_CYP2D6_heatmap.pdf"),
+  plot = CYP2D6_full_variant_heatmap_hori,
+  width = 4, height = 11, units = "in", device = pdf
+)
+
+```
+
+### CYP2D6 Pharmvar vs. Click-seq stacked bar chart
+```{r Hpharmvar_v_clickseq}
+# Updated pharmvar data - done at 7p PST on 10/26/2025
+    ## Splice defects were not included; stop codons and frameshift variants were included
+    ## No function here includes - 'function not assigned' 'uncertain function' and 'unknown function'
+
+# Load the combined activity score data
+CYP2D6_data <- read.table(file = file.path(path, "Final_Scores/20251106_Pacybara_CYP2D6_activity_scores_singles_fs_and_doubles_12_1e-5_8.231228e-05_2expts_softfilter_MINQUAL67.csv"), sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+
+# Load in the PharmVar file 
+counts <- read.table(file = "/Users/gabrielleferra/Desktop/CYP-project/PharmVar_singlesub_data/20251026_7pPST_fig_pharmvar_gf_counts.txt", header = TRUE)
+
+p <- ggplot(data = counts,
+       aes(x = factor(pharmvar, 
+                      levels = c("no_function", "decreased", "normal", "no_interpretation")), 
+           y = count, 
+           fill = factor(gf, 
+                         levels = c('no_data', 'possibly_wt-like', 'wt-like', 'possibly_decreased', 
+                                    'decreased', 'possibly_nonsense-like', 'nonsense-like')))) +
+  geom_col() +
+  theme_linedraw() +
+  ggtitle("PharmVar vs. Click-seq Interpretation") +
+  xlab("PharmVar Interpretation") +
+  ylab("Number of Variants") +
+  labs(fill = "Click-seq\nInterpretation") +
+  theme(
+    panel.border = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size = 15),
+    
+    # add margins to titles for spacing
+    axis.title.x = element_text(size = 20, face = "bold", margin = margin(t = 12)),  # ↑ top margin (moves title away from axis)
+    axis.title.y = element_text(size = 20, face = "bold", margin = margin(r = 12)),  # → right margin
+    
+    legend.title = element_text(size = 20, face = "bold"),
+    legend.text  = element_text(size = 15),
+    plot.title   = element_text(size = 22, hjust = 0.5, face = "bold")
+  ) +
+  scale_x_discrete(labels = c("No Function", "Decreased Function", "Normal Function", "No Interpretation")) +
+  scale_fill_discrete(breaks = c('no_data', 'possibly_wt-like', 'wt-like', 'possibly_decreased', 
+                                 'decreased', 'possibly_nonsense-like', 'nonsense-like')) +
+  scale_fill_manual(
+    values = c('grey', '#B1D7FA', '#3888D1', '#FFE600', '#FFAB00', '#FF6E6E', '#D53E4F'),
+    labels = c("No Data", "Possibly WT-like", "WT-like", "Possibly Decreased", 
+               "Decreased", "Possibly Nonsense-like", "Nonsense-like")
+  )
+
+# Save the plot
+ggsave(file = paste("/Users/gabrielleferra/Desktop/CYP-project/final_plots_CYP2D6_manuscript/sub_figures/20251222_Pharmvar_plot",".pdf",sep=""), plot = p, device = "pdf")
+ggsave(file = paste("/Users/gabrielleferra/Desktop/CYP-project/final_plots_CYP2D6_manuscript/sub_figures/20251222_Pharmvar_plot", ".png",sep=""), plot = p, device = "png")
+
+```
