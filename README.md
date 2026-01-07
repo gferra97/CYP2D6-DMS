@@ -1,7 +1,13 @@
-# Deep mutational scan of CYP2D6 using click-seq
+# Deep mutational scan of CYP2D6
 
 ## Overview
-This repository contains two folders, one named click-seq and one named EOMCC. Both of these contain scripts to compute and analyze functional activity scores for CYP2D6 variants based on each respective assay (click-seq and EOMCC).
+This repository contains analysis code focused on a deep mutational scan of the pharmacogene CYP2D6. High-throughput functional activity scores were generated using two complementary assays: Click-seq and EOMCC.
+
+The repository is currently organized into two main directories:
+
+- `Click-seq/` – scripts for computing and analyzing CYP2D6 variant activity scores derived from Click-seq experiments  
+- `EOMCC/` – scripts for computing and analyzing CYP2D6 variant activity scores derived from EOMCC assays
 
 ## Notes
-This README.md will be updated soon. 
+This repository is under active development. 
+
